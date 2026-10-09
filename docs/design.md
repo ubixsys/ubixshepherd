@@ -1,7 +1,8 @@
 # Design: what Shepherd does, and why it makes agents deterministic
 
-**Status:** Proposed (2026-10-01). Nothing here is built. v1's scope and stack are decided
-and live in [v1.md](v1.md); the rest is the thinking to argue with.
+**Status:** Proposed (2026-10-01). Parts of it are now built, and the status column of
+[v1.md](v1.md)'s milestones says which; that does not make the rest decided. v1's scope
+and stack are decided and live in [v1.md](v1.md); the rest is the thinking to argue with.
 
 ## 1. Start from how the work actually happens today
 
@@ -584,8 +585,9 @@ These feed [open-questions.md](open-questions.md):
   wrapped as a desktop app or hosted. Chosen for Windows, macOS and Linux support from one
   build and a path to a GUI. Webhook intake stays in uBixOps. See [v1.md](v1.md).
 - **Agent adapters.** Driving each provider's CLI headless is the uniform path; provider
-  SDKs give richer control but differ per provider. v1 proposes the CLIs (Claude Code and
-  Gemini CLI).
+  SDKs give richer control but differ per provider. v1 drives the CLIs, and the adapters
+  built so far are Claude Code, Copilot and Cursor; Gemini CLI, first proposed here, has
+  none yet.
 - **Pack format.** Markdown with structured front matter, or a schema-first format that
   renders to Markdown.
 - **Where the human thread lives first.** *Decided 2026-10-01:* the terminal, then a web
