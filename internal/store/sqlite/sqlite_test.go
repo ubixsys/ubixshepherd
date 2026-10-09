@@ -144,3 +144,36 @@ func TestLanesEmpty(t *testing.T) {
 		t.Errorf("lanes = %+v, %v", l, err)
 	}
 }
+
+func TestDeskEvents(t *testing.T) {
+	ctx := context.Background()
+	s, err := Open(ctx, filepath.Join(t.TempDir(), "s.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	for i := 0; i < 5; i++ {
+		if _, err := s.AddDeskEvent(ctx, store.DeskEvent{WorkspaceID: 1, Kind: store.DeskUser, Text: fmt.Sprint(i), Origin: store.DeskByHuman}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s.AddDeskEvent(ctx, store.DeskEvent{WorkspaceID: 2, Kind: store.DeskUser, Text: "other"})
+	after, _ := s.DeskEvents(ctx, 1, 2, 10)
+	if len(after) != 3 || after[0].Seq != 3 || after[0].Text != "2" {
+		t.Errorf("after 2 = %+v", after)
+	}
+	hist, _ := s.DeskHistory(ctx, 1, 5, 2)
+	if len(hist) != 2 || hist[0].Seq != 3 || hist[1].Seq != 4 {
+		t.Errorf("history before 5 = %+v", hist)
+	}
+	if err := s.TrimDeskEvents(ctx, 1, 2); err != nil {
+		t.Fatal(err)
+	}
+	all, _ := s.DeskEvents(ctx, 1, 0, 10)
+	if len(all) != 2 || all[0].Seq != 4 {
+		t.Errorf("after trim = %+v", all)
+	}
+	if other, _ := s.DeskEvents(ctx, 2, 0, 10); len(other) != 1 {
+		t.Errorf("trim touched another workspace: %+v", other)
+	}
+}
