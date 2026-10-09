@@ -2,7 +2,9 @@ package forge
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net"
 	"strings"
 	"testing"
 )
@@ -92,5 +94,25 @@ func TestCleanLog(t *testing.T) {
 	}
 	if got := CleanLog(raw, 1); got != "ERROR: Job failed: exit status 1" {
 		t.Errorf("last line = %q", got)
+	}
+}
+
+func TestUnreachable(t *testing.T) {
+	for err, want := range map[error]bool{
+		nil:                      false,
+		context.DeadlineExceeded: true,
+		&net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}:      true,
+		errors.New("glab api --hostname h p: dial tcp: lookup h: no such host"):          true,
+		errors.New("glab api p: Get \"https://h/api\": net/http: TLS handshake timeout"): true,
+		errors.New("glab api p: 502 Bad Gateway (HTTP 502)"):                             true,
+		errors.New("glab api p: 503 Service Unavailable (HTTP 503)"):                     true,
+		errors.New("glab api p: 401 Unauthorized (HTTP 401)"):                            false,
+		errors.New("glab api p: 404 Not Found (HTTP 404)"):                               false,
+		errors.New("glab api p: 404 timeout of a project (HTTP 404)"):                    false,
+		errors.New("glab api p: invalid character 'x'"):                                  false,
+	} {
+		if got := Unreachable(err); got != want {
+			t.Errorf("Unreachable(%v) = %v", err, got)
+		}
 	}
 }

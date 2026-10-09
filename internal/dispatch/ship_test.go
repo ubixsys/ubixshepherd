@@ -147,7 +147,7 @@ func TestShipEnforcesCommitRules(t *testing.T) {
 	// The fake agent's commit message is "agent work"; forbid "agent".
 	f, sf := shipFixture(t, "ok", pushes+"    forbid: [\"(?i)agent work\"]\n    brief: Sign nothing.\n")
 	run, _ := f.runner.Start(context.Background(), StartRequest{LaneID: f.lane.ID, Agent: "claude", Prompt: "work"})
-	if a := argsOf(t, f.wait(t, run.ID)); !strings.Contains(a, "This repo's rules: Sign nothing.") {
+	if a := stdinOf(t, f.wait(t, run.ID)); !strings.Contains(a, "This repo's rules: Sign nothing.") {
 		t.Errorf("brief lacks the repo's rules: %s", a)
 	}
 	waitFeed(t, f, "the repo's commit rules failed in lane work; asked claude to fix it")

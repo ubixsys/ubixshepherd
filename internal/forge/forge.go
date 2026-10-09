@@ -9,7 +9,9 @@ package forge
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"os/exec"
 	"regexp"
@@ -272,4 +274,36 @@ func CleanLog(raw string, lines int) string {
 		keep = keep[len(keep)-lines:]
 	}
 	return strings.Join(keep, "\n")
+}
+
+// unreachable are the words of errors that mean the host did not answer: DNS, TCP and
+// TLS failures and timeouts, as Go's net package and glab (which prints them) word them.
+var unreachable = regexp.MustCompile(`(?i)no such host|server misbehaving|temporary failure in name resolution|` +
+	`connection refused|connection reset|network is unreachable|no route to host|host is down|` +
+	`i/o timeout|tls handshake timeout|client\.timeout exceeded|deadline exceeded|` +
+	`unexpected eof|broken pipe|dial tcp`)
+
+// serverError and clientError are an HTTP 5xx or 4xx as glab reports it:
+// "502 Bad Gateway (HTTP 502)".
+var (
+	serverError = regexp.MustCompile(`\bHTTP 5\d\d\b`)
+	clientError = regexp.MustCompile(`\bHTTP 4\d\d\b`)
+)
+
+// Unreachable says whether err means the forge's host could not be reached or could not
+// answer (a network failure, or a 5xx), as opposed to an answer that refused the request
+// (a 4xx: no access, no such project), which waiting would not change.
+func Unreachable(err error) bool {
+	if err == nil {
+		return false
+	}
+	var ne net.Error
+	if errors.As(err, &ne) || errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	msg := err.Error()
+	if clientError.MatchString(msg) {
+		return false // an answer, whatever else the message says
+	}
+	return unreachable.MatchString(msg) || serverError.MatchString(msg)
 }

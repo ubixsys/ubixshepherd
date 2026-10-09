@@ -1,11 +1,15 @@
 package convo
 
 import (
+	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/ubixsys/ubixshepherd/internal/store"
 )
 
 func writeSession(t *testing.T, dir, id string, lines ...string) string {
@@ -64,10 +68,38 @@ func TestInUseAndArgs(t *testing.T) {
 	if InUse(f) {
 		t.Error("an hour-old file should not look in use")
 	}
-	args := strings.Join(AskArgs("S", "Q?"), " ")
-	for _, want := range []string{"-p Q?", "--resume S", "--disallowedTools Edit Write Bash"} {
+	args := strings.Join(AskArgs("S"), " ")
+	for _, want := range []string{"-p --resume S", "--disallowedTools Edit Write Bash"} {
 		if !strings.Contains(args, want) {
 			t.Errorf("ask args lack %q: %s", want, args)
 		}
+	}
+}
+
+// fakeClaude answers with what it read on standard input, and records its command line
+// in args.txt next to it.
+const fakeClaude = `#!/bin/sh
+printf '%s ' "$@" > "$(dirname "$0")/args.txt"
+q=$(cat)
+printf '{"type":"result","result":"you asked: %s","total_cost_usd":0.01}\n' "$q"
+`
+
+// The question goes on standard input, never on the command line.
+func TestAskSendsTheQuestionOnStdin(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the fake claude is a shell script")
+	}
+	bin := filepath.Join(t.TempDir(), "claude")
+	os.WriteFile(bin, []byte(fakeClaude), 0o755)
+	a, err := Ask(context.Background(), bin, store.Conversation{ID: "S1", Dir: t.TempDir()}, "where is the webhook secret?")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.Text != "you asked: where is the webhook secret?" {
+		t.Errorf("answer = %q", a.Text)
+	}
+	args, _ := os.ReadFile(filepath.Join(filepath.Dir(bin), "args.txt"))
+	if strings.Contains(string(args), "webhook") || !strings.Contains(string(args), "--resume S1") {
+		t.Errorf("command line: %s", args)
 	}
 }

@@ -38,6 +38,12 @@ func (l Layout) Store() string  { return filepath.Join(l.Home, "shepherd.db") }
 // Log is where a background daemon writes its log.
 func (l Layout) Log() string { return filepath.Join(l.Home, "daemon.log") }
 
+// Console is where a detached daemon's stdout and stderr go, and where a service manager
+// is told to put them: a panic, or an error before the daemon has opened its log. The
+// daemon's own log (Log) is written, and rotated, by the daemon alone, because a file a
+// manager or parent holds open cannot be renamed out from under it.
+func (l Layout) Console() string { return filepath.Join(l.Home, "daemon.out") }
+
 // Runtime is written by a running daemon: its address, pid and access token.
 func (l Layout) Runtime() string { return filepath.Join(l.Home, "daemon.json") }
 

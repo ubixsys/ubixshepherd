@@ -148,9 +148,11 @@ func (f Feed) Event(i int) string {
 	return EventKind(f.Items[i].Kind)
 }
 
-// Setting is a setting's value.
+// Setting is a setting's value. Configured, on a read, is what config.yaml says for a
+// setting that overrides it (desk.model), used when Value is empty.
 type Setting struct {
-	Value string `json:"value"`
+	Value      string `json:"value"`
+	Configured string `json:"configured,omitempty"`
 }
 
 // PathRequests lists requests between lanes (GET).
@@ -158,6 +160,12 @@ const PathRequests = "/v1/requests"
 
 func PathRunRequests(id int64) string  { return fmt.Sprintf("%s/%d/requests", PathRuns, id) }
 func PathRequestRoute(id int64) string { return fmt.Sprintf("%s/%d/route", PathRequests, id) }
+func PathRequestClose(id int64) string { return fmt.Sprintf("%s/%d/close", PathRequests, id) }
+
+// CloseRequest is the body of POST /v1/requests/{id}/close.
+type CloseRequest struct {
+	Why string `json:"why,omitempty"`
+}
 
 // Route is the body of POST /v1/requests/{id}/route.
 type Route struct {
@@ -315,8 +323,12 @@ type CloseLane struct {
 // PrePush is the body of POST /v1/hook/pre-push.
 type PrePush struct {
 	// Path is the worktree git ran the hook in.
-	Path string         `json:"path"`
-	Refs []fold.PushRef `json:"refs"`
+	Path string `json:"path"`
+	// Remote is the hook's first argument: the remote's name, or its URL when the push
+	// names none. An older hook leaves it out, and a push from a running agent's lane is
+	// then refused.
+	Remote string         `json:"remote,omitempty"`
+	Refs   []fold.PushRef `json:"refs"`
 }
 
 // RepoHook is the body of POST /v1/repos/{id}/hook: install, uninstall or status.

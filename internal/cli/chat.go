@@ -14,7 +14,7 @@ import (
 // shepherd chat: the one conversation, with the front desk and the swarm's events.
 func runChat(ctx context.Context, env Env, args []string) error {
 	fs := flags("chat", env)
-	model := fs.String("model", "", "the front desk's model, if not Claude Code's default")
+	model := fs.String("model", "", "the front desk's model, over /model and desk.model in config.yaml")
 	history := fs.Int("history", chat.DefaultHistory, "how many earlier entries to show on start")
 	if pos, err := parse(fs, args); err != nil {
 		return err
@@ -39,8 +39,9 @@ func runChat(ctx context.Context, env Env, args []string) error {
 	if err != nil {
 		return err
 	}
-	desk := chat.ClaudeDesk{Bin: bin, Shepherd: env.Exe, Dir: h.Workspace.Path, Model: *model}
+	desk := chat.ClaudeDesk{Bin: bin, Shepherd: env.Exe, Dir: h.Workspace.Path}
 	m := chat.New(ctx, c, desk, h.Workspace)
+	m.ModelFlag = *model
 	m.HistoryItems = *history
 	chat.DetectBackground()
 	restore := chat.SaveTitle(env.Stdout)

@@ -26,7 +26,7 @@ func TestStartRefusesBadConfig(t *testing.T) {
 	if !strings.Contains(errOut.String(), `"sometimes" is not human or agent`) {
 		t.Errorf("the config error is not shown: %q", errOut)
 	}
-	if _, err := os.Stat(consoleLog(l)); err == nil {
+	if _, err := os.Stat(l.Console()); err == nil {
 		t.Error("a daemon was started anyway")
 	}
 }
@@ -55,7 +55,7 @@ func TestConsoleSince(t *testing.T) {
 	for i := 0; i < 12; i++ {
 		b.WriteString("line " + string(rune('a'+i)) + "\n")
 	}
-	if err := os.WriteFile(consoleLog(l), []byte(b.String()), 0o600); err != nil {
+	if err := os.WriteFile(l.Console(), []byte(b.String()), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	got := consoleSince(l, int64(len(old)))

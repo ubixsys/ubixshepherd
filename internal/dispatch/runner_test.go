@@ -25,8 +25,10 @@ import (
 // one outside it, then tries to push and records whether that worked.
 const fakeAgent = `#!/bin/sh
 if [ "$1" = create-chat ]; then echo "11111111-2222-4333-8444-555555555555"; exit 0; fi
+prompt=$(cat)
 echo "fake agent in $(pwd), run $SHEPHERD_RUN, lane $SHEPHERD_LANE"
 echo "ARGS: $(printf '%s ' "$@" | tr '\n' ' ')"
+echo "STDIN: $(printf '%s' "$prompt" | tr '\n' ' ')"
 case "$MODE" in quick) [ -n "$CREDITS" ] && echo "AI Credits $CREDITS (13s)"; [ -n "$COST" ] && echo "{\"type\":\"result\",\"subtype\":\"success\",\"total_cost_usd\":$COST}"; echo "copilot --resume=cop-$SHEPHERD_RUN-session"; exit 0 ;; esac
 case "$MODE" in sleep) sleep 30 ;; esac
 case "$MODE" in limit) echo "ActionRequiredError: You've hit your usage limit. Upgrade to continue."; exit 1 ;; esac
@@ -367,9 +369,9 @@ func TestRecoverMarksInterrupted(t *testing.T) {
 
 func TestAdapterArgs(t *testing.T) {
 	a, _ := AdapterFor("claude")
-	args := a.Args(Opts{Prompt: "PROMPT", Model: "opus", Gate: "make check", Worktree: "/w", Session: "S1"})
-	if args[0] != "-p" || args[1] != "PROMPT" {
-		t.Errorf("claude: the prompt must follow -p before the tool lists: %v", args)
+	args := a.Args(Opts{Model: "opus", Gate: "make check", Worktree: "/w", Session: "S1"})
+	if args[0] != "-p" || !strings.HasPrefix(args[1], "--") {
+		t.Errorf("claude: -p takes no prompt argument (it reads standard input): %v", args)
 	}
 	joined := strings.Join(args, " ")
 	for _, want := range []string{"--disallowedTools Bash(git push:*)", "Bash(make check:*)", "--model opus", "--permission-mode auto", "--session-id S1"} {
@@ -377,24 +379,24 @@ func TestAdapterArgs(t *testing.T) {
 			t.Errorf("claude args lack %q: %v", want, args)
 		}
 	}
-	if j := strings.Join(a.Args(Opts{Prompt: "P", Worktree: "/w", Session: "S1", Resume: true}), " "); !strings.Contains(j, "--resume S1") || strings.Contains(j, "--session-id") {
+	if j := strings.Join(a.Args(Opts{Worktree: "/w", Session: "S1", Resume: true}), " "); !strings.Contains(j, "--resume S1") || strings.Contains(j, "--session-id") {
 		t.Errorf("claude resume args: %s", j)
 	}
 	c, _ := AdapterFor("copilot")
-	if j := strings.Join(c.Args(Opts{Prompt: "P", Gate: "make check", Worktree: "/w"}), " "); !strings.Contains(j, "--deny-tool shell(git push)") || !strings.Contains(j, "--allow-all-tools") || strings.Contains(j, "--resume") {
+	if j := strings.Join(c.Args(Opts{Gate: "make check", Worktree: "/w"}), " "); !strings.Contains(j, "--deny-tool shell(git push)") || !strings.Contains(j, "--allow-all-tools") || strings.Contains(j, "--resume") {
 		t.Errorf("copilot args: %s", j)
 	}
-	if j := strings.Join(c.Args(Opts{Prompt: "P", Gate: "make check", Worktree: "/w", Mode: config.PermAcceptEdits}), " "); !strings.Contains(j, "--deny-tool shell(git push)") || !strings.Contains(j, "shell(make)") || strings.Contains(j, "--allow-all-tools") {
+	if j := strings.Join(c.Args(Opts{Gate: "make check", Worktree: "/w", Mode: config.PermAcceptEdits}), " "); !strings.Contains(j, "--deny-tool shell(git push)") || !strings.Contains(j, "shell(make)") || strings.Contains(j, "--allow-all-tools") {
 		t.Errorf("copilot args: %s", j)
 	}
-	if j := strings.Join(c.Args(Opts{Prompt: "P", Worktree: "/w", Session: "S2", Resume: true}), " "); !strings.Contains(j, "--resume=S2") {
+	if j := strings.Join(c.Args(Opts{Worktree: "/w", Session: "S2", Resume: true}), " "); !strings.Contains(j, "--resume=S2") {
 		t.Errorf("copilot resume args: %s", j)
 	}
 	if got := c.SessionIn("Resume     copilot --resume=4dcd900f-729e-4b4f"); got != "4dcd900f-729e-4b4f" {
 		t.Errorf("copilot session from output = %q", got)
 	}
 	cu, _ := AdapterFor("cursor")
-	if j := strings.Join(cu.Args(Opts{Prompt: "P", Worktree: "/w", Session: "C1"}), " "); !strings.Contains(j, "--workspace /w") || !strings.Contains(j, "--resume C1") {
+	if j := strings.Join(cu.Args(Opts{Worktree: "/w", Session: "C1"}), " "); !strings.Contains(j, "--workspace /w") || !strings.Contains(j, "--resume C1") {
 		t.Errorf("cursor args: %s", j)
 	}
 	if id, _ := newUUID(); len(id) != 36 || id[14] != '4' {
@@ -407,7 +409,7 @@ func TestAdapterArgs(t *testing.T) {
 
 func TestAgentPowersArgsAndBrief(t *testing.T) {
 	a, _ := AdapterFor("claude")
-	j := strings.Join(a.Args(Opts{Prompt: "P", Mode: config.PermAcceptEdits, Push: true, Merge: true}), " ")
+	j := strings.Join(a.Args(Opts{Mode: config.PermAcceptEdits, Push: true, Merge: true}), " ")
 	for _, want := range []string{"--permission-mode acceptEdits", "Bash(git push:*)", "Bash(glab mr merge:*)"} {
 		if !strings.Contains(j, want) {
 			t.Errorf("claude args lack %q: %s", want, j)
@@ -416,11 +418,11 @@ func TestAgentPowersArgsAndBrief(t *testing.T) {
 	if strings.Contains(j, "--disallowedTools") {
 		t.Errorf("claude denies push to an agent allowed to: %s", j)
 	}
-	if j := strings.Join(a.Args(Opts{Prompt: "P"}), " "); strings.Contains(j, "glab") {
+	if j := strings.Join(a.Args(Opts{}), " "); strings.Contains(j, "glab") {
 		t.Errorf("claude may merge without the repo allowing it: %s", j)
 	}
 	c, _ := AdapterFor("copilot")
-	if j := strings.Join(c.Args(Opts{Prompt: "P", Push: true}), " "); strings.Contains(j, "--deny-tool") {
+	if j := strings.Join(c.Args(Opts{Push: true}), " "); strings.Contains(j, "--deny-tool") {
 		t.Errorf("copilot denies push to an agent allowed to: %s", j)
 	}
 
@@ -462,15 +464,27 @@ func TestAgentPushLiftsTheBlock(t *testing.T) {
 	}
 }
 
+// argsOf is the command line the fake agent was given, as it logged it.
 func argsOf(t *testing.T, run store.Run) string {
+	t.Helper()
+	return logLine(t, run, "ARGS: ")
+}
+
+// stdinOf is what the fake agent read on standard input: its prompt.
+func stdinOf(t *testing.T, run store.Run) string {
+	t.Helper()
+	return logLine(t, run, "STDIN: ")
+}
+
+func logLine(t *testing.T, run store.Run, prefix string) string {
 	t.Helper()
 	b, _ := os.ReadFile(run.Log)
 	for _, line := range strings.Split(string(b), "\n") {
-		if strings.HasPrefix(line, "ARGS: ") {
+		if strings.HasPrefix(line, prefix) {
 			return line
 		}
 	}
-	t.Fatalf("no ARGS line in:\n%s", b)
+	t.Fatalf("no %q line in:\n%s", prefix, b)
 	return ""
 }
 
@@ -485,7 +499,7 @@ func TestLaneKeepsItsConversation(t *testing.T) {
 	if first.Session == "" || first.Parent != 0 {
 		t.Fatalf("first run = %+v", first)
 	}
-	if a := argsOf(t, first); !strings.Contains(a, "--session-id "+first.Session) || !strings.Contains(a, "Do not push") {
+	if a := argsOf(t, first); !strings.Contains(a, "--session-id "+first.Session) || !strings.Contains(stdinOf(t, first), "Do not push") {
 		t.Errorf("first run args: %s", a)
 	}
 
@@ -495,7 +509,7 @@ func TestLaneKeepsItsConversation(t *testing.T) {
 	if second.Session != first.Session || second.Parent != first.ID {
 		t.Errorf("second run = %+v", second)
 	}
-	if a := argsOf(t, second); !strings.Contains(a, "--resume "+first.Session) || strings.Contains(a, "Do not push") {
+	if a := argsOf(t, second); !strings.Contains(a, "--resume "+first.Session) || strings.Contains(stdinOf(t, second), "Do not push") {
 		t.Errorf("second run args: %s", a)
 	}
 
@@ -555,17 +569,17 @@ func TestContinueRefusals(t *testing.T) {
 
 func TestWorkerToolsInjected(t *testing.T) {
 	a, _ := AdapterFor("claude")
-	j := strings.Join(a.Args(Opts{Prompt: "P", Worktree: "/w", Worker: "/bin/shepherd"}), " ")
+	j := strings.Join(a.Args(Opts{Worktree: "/w", Worker: "/bin/shepherd"}), " ")
 	for _, want := range []string{"--strict-mcp-config", `"command":"/bin/shepherd"`, `"args":["mcp","--worker"]`, "mcp__shepherd"} {
 		if !strings.Contains(j, want) {
 			t.Errorf("claude worker args lack %q: %s", want, j)
 		}
 	}
-	if j := strings.Join(a.Args(Opts{Prompt: "P"}), " "); strings.Contains(j, "mcp") {
+	if j := strings.Join(a.Args(Opts{}), " "); strings.Contains(j, "mcp") {
 		t.Errorf("claude without worker mentions mcp: %s", j)
 	}
 	c, _ := AdapterFor("copilot")
-	if j := strings.Join(c.Args(Opts{Prompt: "P", Worker: "/bin/shepherd"}), " "); !strings.Contains(j, "--additional-mcp-config") || !strings.Contains(j, `"tools":["*"]`) || !strings.Contains(j, "--allow-tool shepherd") {
+	if j := strings.Join(c.Args(Opts{Worker: "/bin/shepherd"}), " "); !strings.Contains(j, "--additional-mcp-config") || !strings.Contains(j, `"tools":["*"]`) || !strings.Contains(j, "--allow-tool shepherd") {
 		t.Errorf("copilot worker args: %s", j)
 	}
 	if b := Brief("t", "l", "r", "l", "main", "/w", []string{"x"}, "", Powers{}, true, ""); !strings.Contains(b, "ask_human") || !strings.Contains(b, "ask_shepherd") {
@@ -591,7 +605,7 @@ func TestAnswerContinuesTheAsker(t *testing.T) {
 	if next.Parent != run.ID || next.Session != run.Session {
 		t.Errorf("answer run = %+v", next)
 	}
-	if a := argsOf(t, next); !strings.Contains(a, "no, keep it") || !strings.Contains(a, "--resume "+run.Session) {
+	if a := argsOf(t, next); !strings.Contains(stdinOf(t, next), "no, keep it") || !strings.Contains(a, "--resume "+run.Session) {
 		t.Errorf("answer prompt: %s", a)
 	}
 	if _, err := f.runner.Answer(ctx, d.ID, "again"); !errors.Is(err, ErrRefused) {
@@ -718,5 +732,62 @@ func TestRunQuotaAndInterruptedKinds(t *testing.T) {
 	g.runner.Shutdown(stop)
 	if k := feedKind(t, g, fmt.Sprintf("run %d: claude in lane work interrupted", run.ID)); k != store.FeedRunInterrupted {
 		t.Errorf("interrupted kind = %q", k)
+	}
+}
+
+// A run's model: the one asked for, else the repo's agent.model for its agent (a repo
+// entry over the defaults'), else none, which leaves the CLI's default.
+func TestModelFromProfile(t *testing.T) {
+	f := newFixture(t, "quick")
+	ctx := context.Background()
+	start := func(agent, model string) store.Run {
+		t.Helper()
+		run, err := f.runner.Start(ctx, StartRequest{LaneID: f.lane.ID, Agent: agent, Model: model, Prompt: "x", NewSession: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return f.wait(t, run.ID)
+	}
+	if run := start("claude", ""); run.Model != "" || strings.Contains(argsOf(t, run), "--model") {
+		t.Errorf("no model anywhere: %q %s", run.Model, argsOf(t, run))
+	}
+	cfg := config.Default()
+	cfg.Defaults.Agent.Model = map[string]string{"claude": "sonnet", "copilot": "gpt-5"}
+	cfg.Repos = map[string]config.Profile{"app": {Agent: config.AgentOpts{Model: map[string]string{"claude": "opus"}}}}
+	f.runner.SetConfig(cfg)
+	if run := start("claude", ""); run.Model != "opus" || !strings.Contains(argsOf(t, run), "--model opus") {
+		t.Errorf("repo's agent.model: %q %s", run.Model, argsOf(t, run))
+	}
+	if run := start("claude", "haiku"); run.Model != "haiku" {
+		t.Errorf("an explicit model must win: %q", run.Model)
+	}
+	if got := cfg.Profile("app").Agent.Model["copilot"]; got != "gpt-5" {
+		t.Errorf("the defaults' other agents are kept: %q", got)
+	}
+}
+
+// No adapter puts the prompt on the command line, where ps shows it and a pkill -f
+// pattern matches it: each agent reads it on standard input. The log's header still
+// names the task.
+func TestPromptOnStdinNotArgv(t *testing.T) {
+	for _, agent := range AgentNames() {
+		t.Run(agent, func(t *testing.T) {
+			f := newFixture(t, "quick")
+			const task = "refactor the zebra-quokka parser"
+			run, err := f.runner.Start(context.Background(), StartRequest{LaneID: f.lane.ID, Agent: agent, Prompt: task + "\nand its tests"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			run = f.wait(t, run.ID)
+			if a := argsOf(t, run); strings.Contains(a, "zebra-quokka") || strings.Contains(a, "Task:") || strings.Contains(a, "Work only inside") {
+				t.Errorf("the prompt is on the command line: %s", a)
+			}
+			if in := stdinOf(t, run); !strings.Contains(in, task+" and its tests") || !strings.Contains(in, "Work only inside") {
+				t.Errorf("the prompt is not on standard input: %s", in)
+			}
+			if h := logLine(t, run, "# task: "); h != "# task: "+task+" ..." {
+				t.Errorf("log header = %q", h)
+			}
+		})
 	}
 }

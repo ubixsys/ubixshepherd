@@ -45,13 +45,16 @@ type Server struct {
 	Log        *slog.Logger
 	Fold       *fold.Fold
 	Runner     *dispatch.Runner
-	started    time.Time
-	stop       chan struct{}
-	stopOnce   sync.Once
-	sessMu     sync.Mutex
-	sessLocks  map[string]*sync.Mutex
-	live       atomic.Pointer[config.Config]
-	reloadMu   sync.Mutex
+	// Level is the level Log writes at, when it was opened with this one; a reload sets
+	// it from daemon.log_level.
+	Level     *slog.LevelVar
+	started   time.Time
+	stop      chan struct{}
+	stopOnce  sync.Once
+	sessMu    sync.Mutex
+	sessLocks map[string]*sync.Mutex
+	live      atomic.Pointer[config.Config]
+	reloadMu  sync.Mutex
 }
 
 // NewServer returns a Server with a fresh random token.
@@ -75,24 +78,27 @@ func newToken() (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
-// LogLevelEnv names the environment variable that sets the daemon's log level: debug,
-// info (the default), warn or error. It stands in for a daemon.log_level setting, which
-// needs a field in internal/config.
+// LogLevelEnv names the environment variable that overrides daemon.log_level: debug,
+// info, warn or error.
 const LogLevelEnv = "SHEPHERD_LOG_LEVEL"
 
-// logLevel reads LogLevelEnv; unset or unrecognised gives info.
-func logLevel() slog.Level {
+// LogLevel is the level the daemon logs at: LogLevelEnv's when it names one, else
+// configured (daemon.log_level), else info.
+func LogLevel(configured string) slog.Level {
 	var l slog.Level
-	if err := l.UnmarshalText([]byte(os.Getenv(LogLevelEnv))); err != nil {
-		return slog.LevelInfo
+	if err := l.UnmarshalText([]byte(os.Getenv(LogLevelEnv))); err == nil {
+		return l
 	}
-	return l
+	if err := l.UnmarshalText([]byte(configured)); err == nil {
+		return l
+	}
+	return slog.LevelInfo
 }
 
 // NewLogger returns a logger whose output is redacted before it is written, at the level
-// LogLevelEnv sets.
+// LogLevelEnv sets, else info.
 func NewLogger() *slog.Logger {
-	return newLogger(os.Stderr)
+	return newLogger(os.Stderr, LogLevel(""))
 }
 
 // Handler is the API, behind token authentication.
@@ -138,6 +144,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST "+api.PathRuns+"/{id}/requests", s.withRunner(s.addRequest))
 	mux.HandleFunc("GET "+api.PathRequests, s.listRequests)
 	mux.HandleFunc("POST "+api.PathRequests+"/{id}/route", s.withRunner(s.routeRequest))
+	mux.HandleFunc("POST "+api.PathRequests+"/{id}/close", s.withRunner(s.closeRequest))
 	mux.HandleFunc("POST "+api.PathDecisions+"/{id}/answer", s.withRunner(s.answerDecision))
 	return s.logRequests(s.auth(mux))
 }
@@ -559,7 +566,7 @@ func (s *Server) prePush(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
-	v, err := s.Fold.CheckPush(r.Context(), res.Lane, res.Repo, req.Path, req.Refs)
+	v, err := s.Fold.CheckPushTo(r.Context(), res.Lane, res.Repo, req.Path, req.Remote, req.Refs)
 	if err != nil {
 		s.fail(w, err)
 		return
@@ -809,6 +816,24 @@ func (s *Server) routeRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	q, err := s.Runner.RouteRequest(r.Context(), id, req.Lane, req.Agent)
+	if err != nil {
+		s.foldError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, q)
+}
+
+func (s *Server) closeRequest(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	var req api.CloseRequest
+	if !decode(w, r, &req) {
+		return
+	}
+	q, err := s.Runner.CloseRequest(r.Context(), id, req.Why)
 	if err != nil {
 		s.foldError(w, err)
 		return
@@ -1172,7 +1197,7 @@ func (s *Server) feed(w http.ResponseWriter, r *http.Request) {
 }
 
 // Settings the daemon keeps for clients, by name; anything else is refused.
-var settingKeys = map[string]bool{"desk.session": true, "desk.agent": true}
+var settingKeys = map[string]bool{"desk.session": true, "desk.agent": true, "desk.model": true}
 
 func (s *Server) getSetting(w http.ResponseWriter, r *http.Request) {
 	key := r.PathValue("key")
@@ -1185,7 +1210,11 @@ func (s *Server) getSetting(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, api.Setting{Value: v})
+	out := api.Setting{Value: v}
+	if key == "desk.model" {
+		out.Configured = s.LiveConfig().Desk.Model
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (s *Server) putSetting(w http.ResponseWriter, r *http.Request) {
@@ -1198,6 +1227,12 @@ func (s *Server) putSetting(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &v) {
 		return
 	}
+	v.Value = strings.TrimSpace(v.Value)
+	if key == "desk.model" && strings.ContainsAny(v.Value, " \t\n") {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("%q is not a model name", v.Value))
+		return
+	}
+	v.Configured = ""
 	if err := s.Store.SetSetting(r.Context(), key, v.Value); err != nil {
 		s.fail(w, err)
 		return

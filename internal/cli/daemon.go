@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -104,12 +105,14 @@ func daemonRun(ctx context.Context, env Env) error {
 	}
 	defer st.Close()
 	// The daemon writes and rotates its own log; whatever started it captures only what
-	// the log cannot (see consoleLog). Run by hand in a terminal, it logs there too.
+	// the log cannot (see Layout.Console). Run by hand in a terminal, it logs there too.
 	var also io.Writer
 	if term.IsTerminal(int(os.Stderr.Fd())) {
 		also = os.Stderr
 	}
-	logger, logFile, err := daemon.OpenLogger(l.Log(), also)
+	level := new(slog.LevelVar)
+	level.Set(daemon.LogLevel(cfg.Daemon.LogLevel))
+	logger, logFile, err := daemon.OpenLogger(l.Log(), also, level)
 	if err != nil {
 		return err
 	}
@@ -118,6 +121,7 @@ func daemonRun(ctx context.Context, env Env) error {
 	if err != nil {
 		return err
 	}
+	srv.Level = level
 	srv.Fold.Exe = env.Exe
 	srv.Runner = &dispatch.Runner{Store: st, Config: cfg, Dir: filepath.Join(l.Home, "runs"), Log: srv.Log, Exe: env.Exe}
 	if cfg.Daemon.Poll != "off" {
@@ -142,7 +146,7 @@ func startDaemon(ctx context.Context, env Env, auto bool) (*client.Client, error
 	// What the daemon prints before it dies goes to the console file; note where this
 	// start's output begins, so a failure can quote it.
 	var from int64
-	if fi, err := os.Stat(consoleLog(l)); err == nil {
+	if fi, err := os.Stat(l.Console()); err == nil {
 		from = fi.Size()
 	}
 	mgr, _ := serviceFor()
@@ -162,9 +166,9 @@ func startDaemon(ctx context.Context, env Env, auto bool) (*client.Client, error
 	c, err := waitForDaemon(ctx, env, 10*time.Second)
 	if err != nil {
 		if out := consoleSince(l, from); out != "" {
-			return nil, fmt.Errorf("started the daemon (%s) but it did not answer; it said:\n%s\nsee %s", how, out, consoleLog(l))
+			return nil, fmt.Errorf("started the daemon (%s) but it did not answer; it said:\n%s\nsee %s", how, out, l.Console())
 		}
-		return nil, fmt.Errorf("started the daemon (%s) but it did not answer: %w; see %s and %s", how, err, consoleLog(l), l.Log())
+		return nil, fmt.Errorf("started the daemon (%s) but it did not answer: %w; see %s and %s", how, err, l.Console(), l.Log())
 	}
 	st, _ := c.Status(ctx)
 	fmt.Fprintf(env.Stderr, "started shepherd daemon (pid %d, log %s)\n", st.PID, l.Log())
@@ -173,12 +177,6 @@ func startDaemon(ctx context.Context, env Env, auto bool) (*client.Client, error
 	}
 	return c, nil
 }
-
-// consoleLog is where a detached daemon's stdout and stderr go, and where a service
-// manager is told to put them: a panic, or an error before the daemon has opened its
-// log. The daemon's own log (Layout.Log) is written, and rotated, by the daemon alone,
-// because a file a manager or parent holds open cannot be renamed out from under it.
-func consoleLog(l paths.Layout) string { return filepath.Join(l.Home, "daemon.out") }
 
 // checkConfig reads config.yaml as the daemon will, so a start that would fail on it
 // says why at once instead of waiting for a daemon that has already exited.
@@ -192,7 +190,7 @@ func checkConfig(l paths.Layout) error {
 // consoleSince returns the last lines written to the console file after offset from,
 // trimmed: what a daemon that failed to start printed.
 func consoleSince(l paths.Layout, from int64) string {
-	b, err := os.ReadFile(consoleLog(l))
+	b, err := os.ReadFile(l.Console())
 	if err != nil || int64(len(b)) <= from {
 		return ""
 	}
@@ -206,7 +204,7 @@ func consoleSince(l paths.Layout, from int64) string {
 // spawn starts `shepherd daemon` detached from this terminal, its output going to the
 // console file.
 func spawn(env Env) (int, error) {
-	logf, err := os.OpenFile(consoleLog(env.Layout), os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
+	logf, err := os.OpenFile(env.Layout.Console(), os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
 	if err != nil {
 		return 0, err
 	}
@@ -358,7 +356,7 @@ func daemonInstall(ctx context.Context, env Env) error {
 			return err
 		}
 	}
-	spec := service.Spec{Exe: env.Exe, Log: env.Layout.Log(), Console: consoleLog(env.Layout), Path: os.Getenv("PATH")}
+	spec := service.Spec{Exe: env.Exe, Log: env.Layout.Log(), Console: env.Layout.Console(), Path: os.Getenv("PATH")}
 	if os.Getenv(paths.HomeEnv) != "" {
 		spec.Home = env.Layout.Home
 	}

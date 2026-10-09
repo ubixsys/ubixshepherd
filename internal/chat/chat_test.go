@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -46,13 +49,13 @@ not json
 
 func TestDeskArgs(t *testing.T) {
 	d := ClaudeDesk{Bin: "claude", Shepherd: "/bin/shepherd", Dir: "/w"}
-	first := strings.Join(d.Args("S", "hello", true), " ")
-	for _, want := range []string{"-p hello", "--session-id S", "--append-system-prompt", "--strict-mcp-config", `"args":["mcp"]`, "--allowedTools mcp__shepherd Read Grep Glob", "--disallowedTools Edit Write Bash"} {
+	first := strings.Join(d.Args("S", true), " ")
+	for _, want := range []string{"-p --output-format", "--session-id S", "--append-system-prompt", "--strict-mcp-config", `"args":["mcp"]`, "--allowedTools mcp__shepherd Read Grep Glob", "--disallowedTools Edit Write Bash"} {
 		if !strings.Contains(first, want) {
 			t.Errorf("first turn lacks %q", want)
 		}
 	}
-	next := strings.Join(d.Args("S", "again", false), " ")
+	next := strings.Join(d.Args("S", false), " ")
 	if !strings.Contains(next, "--resume S") || strings.Contains(next, "--append-system-prompt") {
 		t.Errorf("next turn: %s", next)
 	}
@@ -83,6 +86,7 @@ type fakeAPI struct {
 	feed       []store.FeedItem
 	answered   map[int64]string
 	settings   map[string]string
+	configured string // desk.model in config.yaml
 	ds         []api.DecisionView
 	lanes      []api.LaneView
 	runs       []api.RunView
@@ -151,6 +155,13 @@ func (f *fakeAPI) AskSession(_ context.Context, id, q string) (convo.Answer, err
 	return convo.Answer{Text: "The webhook secret is in Vault."}, nil
 }
 func (f *fakeAPI) Setting(_ context.Context, k string) (string, error) { return f.settings[k], nil }
+func (f *fakeAPI) SettingInfo(_ context.Context, k string) (api.Setting, error) {
+	s := api.Setting{Value: f.settings[k]}
+	if k == settingModel {
+		s.Configured = f.configured
+	}
+	return s, nil
+}
 func (f *fakeAPI) SetSetting(_ context.Context, k, v string) error {
 	f.settings[k] = v
 	return nil
@@ -491,5 +502,84 @@ func TestReconnectRetriesAndRestoresChat(t *testing.T) {
 	drive(t, m, cmd)
 	if m.Reconnecting() || a.redials != 2 {
 		t.Fatalf("reconnect did not recover: state %v, attempts %d", m.Reconnecting(), a.redials)
+	}
+}
+
+// The desk's model: the --model flag, then /model's setting, then config.yaml, then
+// Claude Code's default; /model shows which and where from, and sets or resets it.
+func TestModelCommand(t *testing.T) {
+	cases := []struct {
+		flag, set, configured, want, from string
+	}{
+		{"", "", "", "", "Claude Code's default"},
+		{"", "", "sonnet", "sonnet", "desk.model in config.yaml"},
+		{"", "opus", "sonnet", "opus", "set with /model"},
+		{"haiku", "opus", "sonnet", "haiku", "the --model flag"},
+	}
+	for _, c := range cases {
+		got, from := deskModel(c.flag, api.Setting{Value: c.set, Configured: c.configured})
+		if got != c.want || from != c.from {
+			t.Errorf("deskModel(%q, %q, %q) = %q, %q", c.flag, c.set, c.configured, got, from)
+		}
+	}
+
+	m, _, a := newTestModel()
+	a.configured = "sonnet"
+	m.desk = ClaudeDesk{Bin: "claude"}
+	drive(t, m, m.loadModel(false))
+	if d := m.currentDesk().(ClaudeDesk); d.Model != "sonnet" || m.deskName() != "claude · sonnet" {
+		t.Errorf("config's model not used: %+v %q", d, m.deskName())
+	}
+	typeLine(t, m, "/model")
+	if !has(m.Lines(), KindInfo, "The desk's model: sonnet (desk.model in config.yaml)") {
+		t.Errorf("/model: %+v", m.Lines())
+	}
+	typeLine(t, m, "/model opus")
+	if a.settings[settingModel] != "opus" || m.currentDesk().(ClaudeDesk).Model != "opus" ||
+		!has(m.Lines(), KindInfo, "The desk's model: opus (set with /model)") {
+		t.Errorf("/model opus: %q %+v", a.settings[settingModel], m.Lines())
+	}
+	if args := strings.Join(m.currentDesk().(ClaudeDesk).Args("S", false), " "); !strings.Contains(args, "--model opus") {
+		t.Errorf("the turn does not use the model: %s", args)
+	}
+	typeLine(t, m, "/model reset")
+	if a.settings[settingModel] != "" || m.currentDesk().(ClaudeDesk).Model != "sonnet" {
+		t.Errorf("/model reset: %q %+v", a.settings[settingModel], m.currentDesk())
+	}
+	m.ModelFlag = "haiku"
+	typeLine(t, m, "/model fable")
+	if m.currentDesk().(ClaudeDesk).Model != "haiku" || !has(m.Lines(), KindInfo, "The /model setting, fable, applies when the chat starts without --model") {
+		t.Errorf("the flag must win: %+v", m.Lines())
+	}
+	typeLine(t, m, "/model a b")
+	if !has(m.Lines(), KindError, "usage: /model") {
+		t.Error("bad /model not refused")
+	}
+}
+
+// A desk turn sends the person's message on standard input, never on the command line.
+func TestDeskTurnSendsTheMessageOnStdin(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the fake claude is a shell script")
+	}
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "claude")
+	os.WriteFile(bin, []byte(`#!/bin/sh
+printf '%s ' "$@" > "$(dirname "$0")/args.txt"
+m=$(cat)
+printf '{"type":"assistant","message":{"content":[{"type":"text","text":"heard: %s"}]}}\n' "$m"
+echo '{"type":"result","subtype":"success","session_id":"s"}'
+`), 0o755)
+	d := ClaudeDesk{Bin: bin, Shepherd: "/bin/shepherd", Dir: dir}
+	var got []Line
+	if _, err := d.Turn(context.Background(), "", "open a lane for the zebra-quokka fix", func(l Line) { got = append(got, l) }); err != nil {
+		t.Fatal(err)
+	}
+	if !has(got, KindDesk, "heard: open a lane for the zebra-quokka fix") {
+		t.Errorf("reply: %+v", got)
+	}
+	args, _ := os.ReadFile(filepath.Join(dir, "args.txt"))
+	if strings.Contains(string(args), "zebra-quokka") || !strings.Contains(string(args), "--session-id") {
+		t.Errorf("command line: %s", args)
 	}
 }

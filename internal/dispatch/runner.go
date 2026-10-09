@@ -154,8 +154,8 @@ func (r *Runner) outOfQuota(agent string, run int64, l Limit) time.Time {
 // a ship, a gate) reads the configuration once, so a reload never splits one.
 func (r *Runner) SetConfig(c config.Config) { r.cfg.Store(&c) }
 
-// conf is the configuration for one operation: the last SetConfig's, else Config.
-func (r *Runner) conf() config.Config {
+// Conf is the configuration for one operation: the last SetConfig's, else Config.
+func (r *Runner) Conf() config.Config {
 	if c := r.cfg.Load(); c != nil {
 		return *c
 	}
@@ -187,7 +187,7 @@ func (r *Runner) Recover(ctx context.Context) error {
 // Start starts an agent in a lane and returns at once; the run is watched in the
 // background and recorded when it exits.
 func (r *Runner) Start(ctx context.Context, req StartRequest) (store.Run, error) {
-	cfg := r.conf()
+	cfg := r.Conf()
 	var parent store.Run
 	if req.Continue != 0 {
 		p, err := r.Store.Run(ctx, req.Continue)
@@ -235,6 +235,11 @@ func (r *Runner) Start(ctx context.Context, req StartRequest) (store.Run, error)
 	repo, err := r.Store.Repo(ctx, lane.RepoID)
 	if err != nil {
 		return store.Run{}, err
+	}
+	// The model: the one asked for, else the continued run's, else the repo's
+	// agent.model for this agent, else the agent's own default.
+	if req.Model == "" {
+		req.Model = cfg.Profile(repo.Name).Agent.Model[ad.Name]
 	}
 
 	r.mu.Lock()
@@ -325,11 +330,12 @@ func (r *Runner) Start(ctx context.Context, req StartRequest) (store.Run, error)
 		prompt = Brief(req.Prompt, lane.Name, repo.Name, lane.Branch, lane.Base, lane.Worktree, lane.Scope, gate, may, worker != "", note)
 	}
 	agentPushes := may.Push == config.Agent
-	cmd := exec.Command(bin, ad.Args(Opts{Prompt: prompt, Model: req.Model, Gate: gate, Worktree: lane.Worktree,
+	cmd := exec.Command(bin, ad.Args(Opts{Model: req.Model, Gate: gate, Worktree: lane.Worktree,
 		Session: session, Resume: resume, Worker: worker,
 		Mode: prof.Agent.PermissionMode, Push: agentPushes, Merge: may.Merge})...)
 	cmd.Dir = lane.Worktree
-	cmd.Stdin = nil // reads from the null device: headless
+	// The prompt, then end of input: headless, and off the command line (see Adapter).
+	cmd.Stdin = strings.NewReader(prompt)
 	cmd.Env = append(os.Environ(),
 		"GIT_TERMINAL_PROMPT=0",
 		fmt.Sprintf("SHEPHERD_RUN=%d", run.ID), "SHEPHERD_LANE="+lane.Name,

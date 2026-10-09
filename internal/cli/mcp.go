@@ -155,7 +155,7 @@ func mcpTools() []mcpTool {
 				"lane":        map[string]any{"type": "string", "description": "The lane's name; open it first with lane_open."},
 				"agent":       map[string]any{"type": "string", "enum": []string{"claude", "copilot", "cursor"}},
 				"task":        map[string]any{"type": "string", "description": "What the agent should do, as you would brief a colleague. Shepherd adds the lane, scope and rules."},
-				"model":       map[string]any{"type": "string", "description": "Model, if not the agent's default."},
+				"model":       map[string]any{"type": "string", "description": "Model, if not the repo's default for this agent (agent.model in its profile) or the agent's own."},
 				"new_session": map[string]any{"type": "boolean", "description": "Start a new conversation. By default the lane keeps its conversation: the run continues the lane's last session with this agent."},
 			}, "repo", "lane", "agent", "task"),
 			args: func(a map[string]any) ([]string, error) {
@@ -315,6 +315,25 @@ func mcpTools() []mcpTool {
 			},
 		},
 		{
+			Name:        "request_close",
+			Description: "Close a request between lanes without a reply: one gone stale or no longer needed. A target agent already working on it is left to finish, but its reply is not carried back. Say why; the reason is kept on the request.",
+			InputSchema: obj(map[string]any{
+				"id":  map[string]any{"type": "integer"},
+				"why": map[string]any{"type": "string", "description": "Why it is closed."},
+			}, "id"),
+			args: func(a map[string]any) ([]string, error) {
+				id, ok := a["id"].(float64)
+				if !ok {
+					return nil, fmt.Errorf("id must be a number")
+				}
+				out := []string{"request", "close", fmt.Sprint(int64(id))}
+				if w := str(a, "why"); w != "" {
+					out = append(out, "--why", w)
+				}
+				return out, nil
+			},
+		},
+		{
 			Name:        "fold_gc",
 			Description: "List worktrees across the workspace that look finished (merged, branch gone, missing) and lanes whose worktree is gone. Changes nothing.",
 			InputSchema: obj(map[string]any{}),
@@ -394,9 +413,10 @@ func workerTools() []mcpTool {
 		{
 			Name: "ask_shepherd",
 			Description: "Ask for something from another lane: a question to the agent working there, a hand-off of work outside your scope, or a review. " +
+				"Kind person is for the person instead, and becomes a decision for them, as ask_human does. " +
 				"Then end your turn: Shepherd continues this conversation with the reply.",
 			InputSchema: obj(map[string]any{
-				"kind":    map[string]any{"type": "string", "enum": []string{"question", "handoff", "review"}},
+				"kind":    map[string]any{"type": "string", "enum": []string{"question", "handoff", "review", "person"}},
 				"message": map[string]any{"type": "string", "description": "What you need, as you would ask a colleague."},
 				"lane":    map[string]any{"type": "string", "description": "The lane it is for, if you know it."},
 			}, "kind", "message"),

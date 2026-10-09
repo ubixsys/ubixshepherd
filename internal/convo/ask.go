@@ -25,8 +25,10 @@ type Answer struct {
 
 // AskArgs is the command line for a question: the session resumed, headless, able to
 // read but not to edit or run anything. Asking a conversation is asking, not tasking.
-func AskArgs(id, question string) []string {
-	return []string{"-p", question, "--resume", id, "--output-format", "stream-json", "--verbose",
+// The question is not on it: Ask writes it to standard input, where -p with no prompt
+// argument reads it, so it cannot be read with ps.
+func AskArgs(id string) []string {
+	return []string{"-p", "--resume", id, "--output-format", "stream-json", "--verbose",
 		"--allowedTools", "Read", "Grep", "Glob",
 		"--disallowedTools", "Edit", "Write", "Bash", "NotebookEdit"}
 }
@@ -43,8 +45,9 @@ func Ask(ctx context.Context, bin string, c store.Conversation, question string)
 	}
 	ctx, cancel := context.WithTimeout(ctx, AskTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, bin, AskArgs(c.ID, question)...)
+	cmd := exec.CommandContext(ctx, bin, AskArgs(c.ID)...)
 	cmd.Dir = c.Dir
+	cmd.Stdin = strings.NewReader(question)
 	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
 	out, err := cmd.StdoutPipe()
 	if err != nil {

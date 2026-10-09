@@ -24,6 +24,7 @@ import (
 type harness struct {
 	env      Env
 	out, err *bytes.Buffer
+	srv      *daemon.Server
 }
 
 // newHarness starts a daemon on an httptest server and points a CLI Env at it.
@@ -47,7 +48,7 @@ func newHarness(t *testing.T, stdin string, interactive bool) *harness {
 	if err := os.WriteFile(l.Runtime(), rt, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	h := &harness{out: &bytes.Buffer{}, err: &bytes.Buffer{}}
+	h := &harness{out: &bytes.Buffer{}, err: &bytes.Buffer{}, srv: srv}
 	h.env = Env{Stdin: strings.NewReader(stdin), Stdout: h.out, Stderr: h.err, Interactive: interactive, Layout: l, Cwd: home}
 	return h
 }

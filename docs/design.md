@@ -1,7 +1,8 @@
 # Design: what Shepherd does, and why it makes agents deterministic
 
-**Status:** Proposed (2026-10-01). Nothing here is built. v1's scope and stack are decided
-and live in [v1.md](v1.md); the rest is the thinking to argue with.
+**Status:** Proposed (2026-10-01). Parts of it are now built, and the status column of
+[v1.md](v1.md)'s milestones says which; that does not make the rest decided. v1's scope
+and stack are decided and live in [v1.md](v1.md); the rest is the thinking to argue with.
 
 ## 1. Start from how the work actually happens today
 
@@ -114,6 +115,12 @@ done_when: merged      # opened | merged | deployed:<env>
 The same order goes to Claude, Gemini or a local model; each provider adapter turns it
 into that provider's prompt plus the rendered standards.
 
+The prompt never goes on an agent's command line. Anyone on the machine can read a
+process's arguments with `ps`, and a `pkill -f` pattern can match an agent through the
+words of its task and stop it. Shepherd writes the prompt to the agent's standard input
+instead: Claude Code, Copilot and Cursor each read it there when given no prompt argument.
+The same holds for the front desk's turns and for questions to an adopted conversation.
+
 ### 3.4 Typed reports and a closed task state machine
 
 Agents report through Shepherd's API (exposed to them as MCP tools), and each report is a
@@ -199,6 +206,13 @@ The boundaries still hold whichever is set: the pre-push hook checks the branch 
 and the forge's approvals, pipelines and threads decide whether a merge happens. No
 setting lets an agent approve.
 
+Under `autonomy.push: agent` the hook also tells the daemon which remote git is pushing
+to, and a running agent's push goes ahead only to the lane repo's origin, by name or by
+its URL. A push to any other remote is refused, and so is one from a hook that names no
+remote (an older hook), since the daemon cannot tell where it goes. The hook is the only
+check here: the run is not push-blocked, so it holds for an agent that cooperates, not
+one that passes `--no-verify` or rewrites its origin.
+
 ### 3.8 Playbooks: "missed once already" becomes "cannot be missed"
 
 A playbook is an event plus a condition that produces work orders, like a CI rule:
@@ -282,6 +296,13 @@ classifier, trained on outcome records, is an option for offline or air-gapped i
 A model choosing the model would be more flexible on day one and impossible to predict or
 audit. The table starts dumber and gets better from measured outcomes, which is the same
 trade uBixCore makes everywhere else.
+
+Until the table exists, models are plain settings. A run uses the model it is started
+with, else the one the run it continues used, else the repo profile's `agent.model` for
+its agent (a map such as `{claude: sonnet}`, a repo's entries over the defaults'), else
+the agent CLI's own default. The front desk uses the chat's `--model` flag, else the
+override set with `/model` in the chat, else `desk.model` in `config.yaml`, else Claude
+Code's default.
 
 ### 3.12 Packs: useful to anyone, best with uBixCore
 
@@ -564,8 +585,9 @@ These feed [open-questions.md](open-questions.md):
   wrapped as a desktop app or hosted. Chosen for Windows, macOS and Linux support from one
   build and a path to a GUI. Webhook intake stays in uBixOps. See [v1.md](v1.md).
 - **Agent adapters.** Driving each provider's CLI headless is the uniform path; provider
-  SDKs give richer control but differ per provider. v1 proposes the CLIs (Claude Code and
-  Gemini CLI).
+  SDKs give richer control but differ per provider. v1 drives the CLIs, and the adapters
+  built so far are Claude Code, Copilot and Cursor; Gemini CLI, first proposed here, has
+  none yet.
 - **Pack format.** Markdown with structured front matter, or a schema-first format that
   renders to Markdown.
 - **Where the human thread lives first.** *Decided 2026-10-01:* the terminal, then a web

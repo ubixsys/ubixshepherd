@@ -118,7 +118,7 @@ func beyond(total, before float64) float64 {
 
 // Spent is today's spend in dollars, Copilot's credits priced at credit_usd.
 func (r *Runner) Spent(ctx context.Context) (float64, map[string]store.Spend, error) {
-	return Spent(ctx, r.Store, r.conf())
+	return Spent(ctx, r.Store, r.Conf())
 }
 
 // Spent is today's spend from the store alone, for callers with no Runner.
@@ -170,7 +170,7 @@ func (r *Runner) Spend(ctx context.Context, sp store.Spend) error {
 	if err := r.Store.AddSpend(ctx, sp); err != nil {
 		return err
 	}
-	cfg := r.conf()
+	cfg := r.Conf()
 	b := budget(cfg)
 	if b <= 0 {
 		return nil

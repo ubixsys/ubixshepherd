@@ -15,7 +15,7 @@ func runHook(ctx context.Context, env Env, args []string) error {
 		return errUsage
 	}
 	if args[0] == "pre-push" {
-		return hookPrePush(ctx, env)
+		return hookPrePush(ctx, env, args[1:])
 	}
 	fs := flags("hook "+args[0], env)
 	repo := fs.String("repo", "", "repo, by its name in the workspace (default: the one you are in)")
@@ -60,8 +60,9 @@ func runHook(ctx context.Context, env Env, args []string) error {
 }
 
 // hookPrePush is what the installed hook runs. git starts it in the worktree being
-// pushed from, with the refs on stdin.
-func hookPrePush(ctx context.Context, env Env) error {
+// pushed from, with the remote's name (or URL, when it has no name) and URL as
+// arguments and the refs on stdin.
+func hookPrePush(ctx context.Context, env Env, args []string) error {
 	env.Client = "hook"
 	in, err := io.ReadAll(env.Stdin)
 	if err != nil {
@@ -75,7 +76,11 @@ func hookPrePush(ctx context.Context, env Env) error {
 	if err != nil {
 		return fmt.Errorf("cannot check this push: %w\n(push without Shepherd's check: git push --no-verify)", err)
 	}
-	v, err := c.PrePush(ctx, api.PrePush{Path: env.Cwd, Refs: refs})
+	req := api.PrePush{Path: env.Cwd, Refs: refs}
+	if len(args) > 0 {
+		req.Remote = args[0]
+	}
+	v, err := c.PrePush(ctx, req)
 	if err != nil {
 		return fmt.Errorf("cannot check this push: %w\n(push without Shepherd's check: git push --no-verify)", err)
 	}

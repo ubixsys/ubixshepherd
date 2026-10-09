@@ -48,7 +48,7 @@ const DeskBrief = `You are the front desk of uBixShepherd: the one conversation 
 - Delegate the work. To change a repo: open a lane (lane_open, with a scope that fits the job), then start an agent in it (lane_run) with a clear brief. Choose the agent that fits; say which and why in a few words. Follow up on a lane with run_continue rather than starting over.
 - You cannot edit files or run commands yourself, and should not try. You may read files to plan.
 - Decisions agents hold for the person (decision_list) are theirs: bring them up with the options and the recommendation, and record an answer (decision_answer) only with the person's own words.
-- Requests between lanes that Shepherd could not route (request_list, needs_routing) are yours to route with request_route, opening a lane first if needed.
+- Requests between lanes that Shepherd could not route (request_list, needs_routing) are yours to route with request_route, opening a lane first if needed; close one that has gone stale with request_close, saying why.
 - Messages starting with [Shepherd] are events from the swarm, not the person. Tell the person briefly what matters, act where it is yours to (routing, follow-ups on work they asked for), and do not start new work they have not asked for.
 - Be brief. The person reads a thread with many agents in it: lead with what happened and what needs them.`
 
@@ -70,12 +70,14 @@ type ClaudeDesk struct {
 	Projects string
 }
 
-// Args builds one turn's command line.
-func (d ClaudeDesk) Args(session, message string, newSession bool) []string {
+// Args builds one turn's command line. The message is not on it: Turn writes it to
+// claude's standard input, where -p with no prompt argument reads it, so it cannot be
+// read with ps or matched by a pkill -f pattern.
+func (d ClaudeDesk) Args(session string, newSession bool) []string {
 	mcp, _ := json.Marshal(map[string]any{"mcpServers": map[string]any{
 		"shepherd": map[string]any{"command": d.Shepherd, "args": []string{"mcp"}},
 	}})
-	a := []string{"-p", message, "--output-format", "stream-json", "--verbose", "--include-partial-messages"}
+	a := []string{"-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages"}
 	if newSession {
 		a = append(a, "--session-id", session, "--append-system-prompt", DeskBrief)
 	} else {
@@ -89,6 +91,12 @@ func (d ClaudeDesk) Args(session, message string, newSession bool) []string {
 		a = append(a, "--model", d.Model)
 	}
 	return a
+}
+
+// WithModel is the desk on another model; "" is Claude Code's default.
+func (d ClaudeDesk) WithModel(model string) Desk {
+	d.Model = model
+	return d
 }
 
 // Name says what the desk runs on, for the status line.
@@ -108,9 +116,9 @@ func (d ClaudeDesk) Turn(ctx context.Context, session, message string, emit func
 			return "", err
 		}
 	}
-	cmd := exec.CommandContext(ctx, d.Bin, d.Args(session, message, newSession)...)
+	cmd := exec.CommandContext(ctx, d.Bin, d.Args(session, newSession)...)
 	cmd.Dir = d.Dir
-	cmd.Stdin = nil
+	cmd.Stdin = strings.NewReader(message)
 	cmd.Env = append(os.Environ(), "SHEPHERD_CLIENT=desk")
 	out, err := cmd.StdoutPipe()
 	if err != nil {

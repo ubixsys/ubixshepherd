@@ -33,7 +33,8 @@ func (s *Server) LiveConfig() config.Config {
 // refused: the daemon keeps the one it has and says why on the feed. A valid one is put
 // in force for whatever starts next (runs, gates, ships, lanes), and the feed says what
 // changed. A running agent keeps what it was started with: its brief and gate were
-// fixed when it started. The listen address and poll interval take a restart.
+// fixed when it started. The log level applies at once (unless SHEPHERD_LOG_LEVEL is
+// set, which overrides it). The listen address and poll interval take a restart.
 func (s *Server) ReloadConfig(ctx context.Context) error {
 	s.reloadMu.Lock()
 	defer s.reloadMu.Unlock()
@@ -56,21 +57,19 @@ func (s *Server) ReloadConfig(ctx context.Context) error {
 	return nil
 }
 
-// applyConfig puts cfg in force for the server, its Fold and its Runner.
-//
-// Workaround: dispatch.Runner and fold.Fold hold config.Config by value and read it
-// without a lock the daemon can take, so assigning their field can race a reader in
-// the middle of Start, Ship or a lane operation. A reload is a rare, deliberate act, so
-// the window is small, but the clean fix belongs to those packages: keep the config
-// behind an atomic.Pointer with a SetConfig method and read it once per operation.
-// Until then, this is the one place that writes their field.
+// applyConfig puts cfg in force for the server, its Fold and its Runner. Each holds it
+// behind an atomic pointer and reads it once per operation, so a reload never races
+// one going.
 func (s *Server) applyConfig(cfg config.Config) {
 	s.live.Store(&cfg)
+	if s.Level != nil {
+		s.Level.Set(LogLevel(cfg.Daemon.LogLevel))
+	}
 	if s.Fold != nil {
-		s.Fold.Config = cfg
+		s.Fold.SetConfig(cfg)
 	}
 	if s.Runner != nil {
-		s.Runner.Config = cfg
+		s.Runner.SetConfig(cfg)
 	}
 }
 
@@ -103,6 +102,12 @@ func configChanges(old, next config.Config) string {
 	}
 	if !reflect.DeepEqual(d.CreditUSD, n.CreditUSD) {
 		out = append(out, fmt.Sprintf("daemon.credit_usd %s to %s", amount(d.CreditUSD), amount(n.CreditUSD)))
+	}
+	if d.LogLevel != n.LogLevel {
+		out = append(out, fmt.Sprintf("daemon.log_level %s to %s", d.LogLevel, n.LogLevel))
+	}
+	if old.Desk.Model != next.Desk.Model {
+		out = append(out, fmt.Sprintf("desk.model %q to %q", old.Desk.Model, next.Desk.Model))
 	}
 	if !reflect.DeepEqual(old.Defaults, next.Defaults) {
 		out = append(out, "defaults")

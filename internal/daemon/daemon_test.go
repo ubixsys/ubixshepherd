@@ -322,8 +322,19 @@ func TestLogLevelEnv(t *testing.T) {
 		"error": slog.LevelError, "loud": slog.LevelInfo,
 	} {
 		t.Setenv(LogLevelEnv, in)
-		if got := logLevel(); got != want {
+		if got := LogLevel(""); got != want {
 			t.Errorf("%s=%q: %v, want %v", LogLevelEnv, in, got, want)
+		}
+	}
+	// The variable overrides daemon.log_level; unset or unrecognised, the config wins.
+	t.Setenv(LogLevelEnv, "error")
+	if got := LogLevel("debug"); got != slog.LevelError {
+		t.Errorf("env over config: %v", got)
+	}
+	for _, env := range []string{"", "loud"} {
+		t.Setenv(LogLevelEnv, env)
+		if got := LogLevel("warn"); got != slog.LevelWarn {
+			t.Errorf("%s=%q, config warn: %v", LogLevelEnv, env, got)
 		}
 	}
 }
@@ -445,5 +456,31 @@ func TestFeedCarriesEvents(t *testing.T) {
 	call(t, ts, s.Token, "GET", api.PathFeed+"?after=latest", nil, &empty)
 	if empty.Items == nil || empty.Events == nil {
 		t.Error("an empty feed must send [] not null")
+	}
+}
+
+// desk.model is a setting the chat may store; a read carries config.yaml's value under it.
+func TestDeskModelSetting(t *testing.T) {
+	s, ts := newServer(t)
+	cfg := s.LiveConfig()
+	cfg.Desk.Model = "sonnet"
+	s.applyConfig(cfg)
+	path := api.PathSettings + "/desk.model"
+	var got api.Setting
+	if code := call(t, ts, s.Token, "GET", path, nil, &got); code != http.StatusOK || got.Value != "" || got.Configured != "sonnet" {
+		t.Errorf("unset: %d %+v", code, got)
+	}
+	if code := call(t, ts, s.Token, "PUT", path, api.Setting{Value: " opus "}, nil); code != http.StatusOK {
+		t.Errorf("set: %d", code)
+	}
+	got = api.Setting{}
+	if call(t, ts, s.Token, "GET", path, nil, &got); got.Value != "opus" || got.Configured != "sonnet" {
+		t.Errorf("set: %+v", got)
+	}
+	if code := call(t, ts, s.Token, "PUT", path, api.Setting{Value: "my model"}, nil); code != http.StatusBadRequest {
+		t.Errorf("a name with a space: %d", code)
+	}
+	if code := call(t, ts, s.Token, "GET", api.PathSettings+"/desk.nope", nil, nil); code != http.StatusNotFound {
+		t.Errorf("unknown key: %d", code)
 	}
 }
