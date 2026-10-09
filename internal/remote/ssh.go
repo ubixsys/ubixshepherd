@@ -149,7 +149,13 @@ type SSH struct {
 
 	mu     sync.Mutex
 	tunnel Proc
+	// forward is the -L spec held in a shared connection's master, which outlives the
+	// ssh process that asked for it and has to be cancelled by name.
+	forward string
 }
+
+// shared says tunnels go through a shared connection (ControlMaster).
+func (s *SSH) shared() bool { return s.Target.Control && s.ControlDir != "" }
 
 func (s *SSH) bin() string {
 	if s.Bin != "" {
@@ -268,9 +274,13 @@ func (s *SSH) Dial(ctx context.Context) (Endpoint, error) {
 		last = s.waitReady(ctx, proc, port, rt.Token)
 		if last == nil {
 			s.tunnel = proc
+			if s.shared() {
+				s.forward = "127.0.0.1:" + strconv.Itoa(port) + ":" + fwd
+			}
 			return Endpoint{Base: "http://127.0.0.1:" + strconv.Itoa(port), token: rt.Token}, nil
 		}
 		proc.Stop()
+		s.cancelForward("127.0.0.1:" + strconv.Itoa(port) + ":" + fwd)
 		var be *bindError
 		if !errors.As(last, &be) {
 			break // only a local port taken in the meantime is worth another try
@@ -292,6 +302,23 @@ func (s *SSH) stopLocked() {
 		s.tunnel.Stop()
 		s.tunnel = nil
 	}
+	if s.forward != "" {
+		s.cancelForward(s.forward)
+		s.forward = ""
+	}
+}
+
+// cancelForward asks a shared connection's master to drop a forward. Through a master,
+// ssh -N -L may return as soon as the master has the forward, and killing a client does
+// not end it, so without this the local port would stay open until the master exits.
+func (s *SSH) cancelForward(spec string) {
+	if !s.shared() {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	args := append(s.baseArgs(), "-O", "cancel", "-L", spec, "--", s.Target.Dest)
+	s.runner().Output(ctx, s.bin(), args...)
 }
 
 // RuntimeInfo is the part of the daemon's runtime file this layer reads.
@@ -325,6 +352,12 @@ func (s *SSH) waitReady(ctx context.Context, p Proc, port int, token string) err
 	for {
 		select {
 		case err := <-exited:
+			if err == nil && s.shared() {
+				// A client of a shared connection hands its forward to the master and
+				// returns; the forward is up if the port answers.
+				exited = nil
+				continue
+			}
 			if err == nil {
 				err = errors.New("ssh exited")
 			}

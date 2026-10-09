@@ -26,7 +26,10 @@ type fakeRunner struct {
 	// tunnelExit, when set, makes a started tunnel exit at once with this stderr.
 	tunnelExit error
 	tunnelErrb string
-	procs      []*fakeProc
+	// exitClean makes a tunnel hand its forward to a shared master: the listener is up
+	// and the process returns 0 at once.
+	exitClean bool
+	procs     []*fakeProc
 }
 
 func (f *fakeRunner) Output(_ context.Context, name string, args ...string) ([]byte, []byte, error) {
@@ -60,6 +63,9 @@ func (f *fakeRunner) Start(name string, args ...string) (Proc, error) {
 					break
 				}
 				p.l = l
+				if f.exitClean {
+					close(p.done)
+				}
 				go func() {
 					for {
 						c, err := l.Accept()
@@ -404,4 +410,37 @@ func TestDialHonoursContext(t *testing.T) {
 		}
 	}
 	s.Close()
+}
+
+func TestSharedConnectionTunnelThatReturnsAtOnce(t *testing.T) {
+	f := &fakeRunner{out: goodRuntime(), exitClean: true}
+	s := newSSH(f, Target{Dest: "me@box", Control: true})
+	s.ControlDir = t.TempDir()
+	ep, err := s.Dial(context.Background())
+	if err != nil {
+		t.Fatalf("a client that hands its forward to the master and returns is not a failure: %v", err)
+	}
+	port := strings.TrimPrefix(ep.Base, "http://127.0.0.1:")
+	s.Close()
+	last := strings.Join(f.calls[len(f.calls)-1], " ")
+	if !strings.Contains(last, "-O cancel -L 127.0.0.1:"+port+":127.0.0.1:7400") || !strings.Contains(last, "ControlPath=") {
+		t.Errorf("Close did not cancel the forward in the master: %s", last)
+	}
+	n := len(f.calls)
+	s.Close()
+	if len(f.calls) != n {
+		t.Error("a second Close cancelled again")
+	}
+
+	// Without a shared connection, a tunnel that returns 0 is a failure.
+	f = &fakeRunner{out: goodRuntime(), exitClean: true}
+	if _, err := newSSH(f, Target{Dest: "me@box"}).Dial(context.Background()); err == nil {
+		t.Error("an ssh that exited cleanly without a master was taken as a tunnel")
+	}
+	// And no cancel is sent when nothing is shared.
+	for _, c := range f.calls {
+		if strings.Contains(strings.Join(c, " "), "-O cancel") {
+			t.Errorf("cancel without a master: %v", c)
+		}
+	}
 }
