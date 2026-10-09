@@ -412,7 +412,12 @@ their runs interrupted.
 
 Shepherd keeps its files in `~/.shepherd` on every OS (or `$SHEPHERD_HOME`): the config,
 the SQLite store, the daemon's log, and the running daemon's address and access token. The daemon listens on
-loopback only. On its first start it writes `~/.shepherd/config.yaml` with every setting
+loopback only. The token in `daemon.json` is the operator's: the person's own tools use it.
+Each agent Shepherd starts gets a token of its own instead, good only for its run's worker
+tools and revoked when the run ends, so an agent's tools cannot answer its decisions or
+start other agents. That stops accidents, not a determined agent: an agent runs as your OS
+user and can read `daemon.json`. Isolating agents under another account or a sandbox is
+planned (see [docs/design.md](docs/design.md#317-the-humanagent-boundary-scoped-tokens)). On its first start it writes `~/.shepherd/config.yaml` with every setting
 commented out, so the defaults apply until you change one; it never touches the file
 again. A repo's profile comes from that file, over cautious defaults (a human merges, tags
 and deploys; agents plan first):

@@ -531,6 +531,34 @@ its next major version (synchronized output, tab progress, clipboard, distinct S
 Moving to it is a step of its own, after checking that printing above an inline view and
 resizing behave as the thread needs.
 
+### 3.17 The human/agent boundary: scoped tokens
+
+**Status: built (2026-10-09) as a first step; isolation is planned for later.**
+
+Some acts are the person's alone (§3.7): answering a decision, starting or stopping
+agents, opening and closing lanes, changing settings. The daemon enforces that at its API,
+the boundary every client crosses, with three kinds of token:
+
+| Role | Who holds it | Lives | May call |
+|---|---|---|---|
+| Operator | The person and their own tools: the CLI, the terminal chat, their MCP server | `daemon.json`, replaced on each daemon start | Every endpoint |
+| Worker | One agent Shepherd started, in its environment as `SHEPHERD_TOKEN` | Minted when its run starts; revoked when the run ends or the daemon restarts | What the worker tools need, for its own run: report, ask the person, ask another lane, reserve and release its lane's tags, read its run, the pre-push check |
+| Desk | The front desk the daemon runs | Minted for the desk; revoked when the daemon stops | The operator tools, except answering a decision, which it may do only in a turn the person started |
+
+A worker token used on another run's resources, or after its run ended, is refused. The
+daemon keeps only a hash of each scoped token, in memory. Clients that run inside an agent
+(the worker MCP server, and the operator MCP server when Shepherd starts it) use the token
+they were given and never read `daemon.json`. For agent CLIs that start MCP servers
+without passing their environment on, the run's token is also written to the lane
+worktree's private git directory, never the work tree, and removed when the run ends.
+
+**What this does not do.** Scoped tokens stop accidents and tool misuse: an agent's tools
+cannot answer its own question, start another agent or close a lane, and a desk woken by an
+event cannot answer for the person. They are not isolation. An agent runs as the same OS
+user as the daemon, so it can read `daemon.json` and use the operator token. Real
+isolation needs agents under a separate account or an OS sandbox; that is planned for
+later.
+
 ## 4. Where the efficiency comes from
 
 | Today | With Shepherd |
