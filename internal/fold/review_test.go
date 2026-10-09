@@ -107,7 +107,11 @@ func TestInferScope(t *testing.T) {
 func TestReviewIgnoresARootCommit(t *testing.T) {
 	f := newFixture(t)
 	dir := filepath.Join(f.ws, "app-worktrees", "rooted")
-	gitT(t, f.repo.Path, "worktree", "add", "-q", "--orphan", "-b", "rooted", dir)
+	// `worktree add --orphan` needs git 2.42; `checkout --orphan` in a detached
+	// worktree gives the same parentless branch on any git.
+	gitT(t, f.repo.Path, "worktree", "add", "-q", "--detach", dir)
+	gitT(t, dir, "checkout", "-q", "--orphan", "rooted")
+	gitT(t, dir, "rm", "-rfq", ".")
 	commitAt(t, dir, "everything.txt", "2026-01-01T10:00:00Z")
 	reviews, _ := f.fold.ReviewRepo(context.Background(), f.repo.ID)
 	for _, r := range reviews {
