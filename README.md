@@ -9,19 +9,40 @@ and many AI agents (Claude, Gemini, and whatever comes next). You talk to Shephe
 hands out the work, keeps the agents from stepping on each other, holds the decisions that
 are yours for you, and reports back in one thread.
 
-> Status: **early build**. v1's scope and stack are decided ([docs/v1.md](docs/v1.md)): a Go
-> core, the Fold and dispatch, GitLab and GitHub, useful on any repo and aimed at uBixCore.
-> M1 is complete; M2, M3 proofs and M5 dispatch are partly implemented; M4's MCP tools and
-> terminal front desk are implemented; M6 has not started. Current code includes per-repo
-> scope leases and lane origins, tag reservations, forge polling and merge-based lane
-> closure, operator and worker MCP tools, configured agent permissions and push/merge
-> autonomy, per-run costs and quota holds, routed requests, and `shepherd chat`. The web UI
-> is in progress, but there are no `web/` sources in this checkout. Remaining gaps include
-> workspace-wide leases, GitHub mirror and publication proofs, typed cross-repo work orders
-> and triage, and end-to-end cross-repo delivery without relaying.
+> Status: **beta**. The first release is `v0.1.0-beta.1`. Shepherd's interfaces (the CLI,
+> the config file, the HTTP API, the MCP tools and the hook protocol) may still change
+> between betas, and every such change is called out in [CHANGELOG.md](CHANGELOG.md); see
+> [docs/VERSIONING.md](docs/VERSIONING.md). Lanes, scope leases, the pre-push hook, tag
+> reservations, agent runs with Claude Code, Copilot and Cursor, decisions, routed
+> requests, GitLab polling and `shepherd chat` work today. GitLab is the only forge for
+> lanes, macOS and Linux are tested while Windows builds untested, and workspace-wide
+> leases, typed cross-repo work orders and triage are not built yet. The web UI in `web/`
+> is a preview the daemon does not serve. The changelog's "Known limits" has the full list,
+> and [docs/v1.md](docs/v1.md) and [docs/roadmap.md](docs/roadmap.md) the plan.
 
 Part of the **uBix** family of open-source systems tooling (uBixCore, uBixVault, uBixOps,
 Replikate, UbixOS), published under [uBixSys](https://ubixsys.com).
+
+## Install
+
+**From a release (recommended).** Download the archive for your OS and architecture from
+[GitHub Releases](https://github.com/ubixsys/ubixshepherd/releases), with `SHA256SUMS` and
+`SHA256SUMS.sigstore.json`, verify it ([docs/RELEASING.md](docs/RELEASING.md#verifying-a-download)
+has the commands), unpack it and put `shepherd` on your PATH, for example in
+`~/.local/bin`.
+
+**With Go** (see `go.mod` for the version):
+
+```sh
+go install github.com/ubixsys/ubixshepherd/cmd/shepherd@v0.1.0-beta.1
+```
+
+A `go install` build reports its version as `dev`: only builds made with `make` stamp it.
+
+**From source:** clone the repo and run `make install` (below).
+
+Shepherd needs git, and the CLIs of the agents you want it to start (`claude`, `copilot`,
+`cursor-agent`) and of your forge (`glab`), each logged in on this machine.
 
 ## Build and run
 
@@ -418,6 +439,9 @@ More versions (one-liner, technical) are in [docs/pitch.md](docs/pitch.md).
 | [docs/origins.md](docs/origins.md) | The practices Shepherd grows out of, already running around uBixCore |
 | [docs/pitch.md](docs/pitch.md) | Elevator pitches, ready to paste |
 | [docs/open-questions.md](docs/open-questions.md) | Decisions not yet made |
+| [CHANGELOG.md](CHANGELOG.md) | What each release changed, and its known limits |
+| [docs/VERSIONING.md](docs/VERSIONING.md) | What the version number promises, and what it does not |
+| [docs/RELEASING.md](docs/RELEASING.md) | How a release is cut and published, and how to verify a download |
 | [CLAUDE.md](CLAUDE.md) | Hand-off notes for an AI session picking this up |
 
 ## Licence

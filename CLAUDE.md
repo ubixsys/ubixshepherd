@@ -12,8 +12,8 @@ Claude Code, Copilot and Cursor dispatch with configured permission modes and re
 push and merge autonomy; per-run costs, quota holds and routed requests; GitLab polling,
 merge closure and failed-pipeline handoffs; and `shepherd chat`. GitHub mirror proofs through
 publication, typed cross-repo work orders and triage, and the end-to-end cross-repo delivery
-criterion are not implemented. The web UI is in progress, but no `web/` sources are present
-in this checkout.
+criterion are not implemented. The web UI is a preview in `web/`, not yet served by the
+daemon.
 v1's scope and stack were decided on 2026-10-01: a **Go** core (daemon, CLI, MCP server, HTTP
 API in one binary for Windows, macOS and Linux), the Fold and dispatch together, GitLab and
 GitHub, running over a workspace of repos, terminal first with a TypeScript web UI later.
@@ -42,7 +42,9 @@ pack, never in the core (see `design.md` §3.12). The docs:
 
 Go, one binary (`cmd/shepherd`), packages under `internal/`. `make check` is the gate
 (gofmt, vet, tests, `core-boundary`); `make build` gives `bin/shepherd`, `make cross` the six
-release targets. CI runs `public-boundary`, `go-check` and `go-cross`.
+release targets, `make dist` their release archives and `SHA256SUMS`. GitLab CI runs
+`public-boundary`, `go-check` and `go-cross`; GitHub Actions runs `make check` on Linux,
+macOS and (informational) Windows, and publishes releases.
 
 - The daemon (`internal/daemon`) owns the store; the CLI is a client of the HTTP API
   (`internal/api`, `internal/client`) like every other client. Don't let a command open the
@@ -100,6 +102,16 @@ release targets. CI runs `public-boundary`, `go-check` and `go-cross`.
 - `core-boundary` fails if `cmd/` or `internal/` names a product. Product knowledge goes in
   a pack.
 - Keep dependencies few: the standard library first (the CLI is `flag`, not a framework).
+
+## Releases
+
+GitHub is the public home and where releases are published: the internal forge
+push-mirrors protected branches and tags to it, and `.github/workflows/release.yml` builds,
+signs (keyless cosign) and publishes a GitHub Release for each `v*` tag, with notes from
+its `CHANGELOG.md` section. A release is a changelog section landed on `dev`, then a tag
+pushed to the internal forge, never to GitHub. Read [docs/RELEASING.md](docs/RELEASING.md)
+before cutting one, and [docs/VERSIONING.md](docs/VERSIONING.md) for what the number
+promises. Agents never tag or publish a release unasked.
 
 ## This repo is public
 
