@@ -418,6 +418,23 @@ repos:
     promotion: [dev, staging, main]
 ```
 
+## Branches and releases
+
+Shepherd is developed on an internal forge that push-mirrors its protected branches and
+tags to GitHub, so GitHub is the public home but not where work lands.
+
+- **Work lands on `dev`** by merge request, through the gate (`make check` and the
+  boundary checks).
+- **`main` is the release branch and GitHub's default branch.** It is protected, and it
+  moves only by fast-forward from a green `dev`: when the checks pass on a push to `dev`,
+  a job on the internal forge promotes that commit to `main` (`bin/promote.sh`). It never
+  forces, does nothing if `main` already has the commit, and refuses to promote when
+  `main` has diverged from `dev`, which means someone wrote to `main` directly and it has
+  to be reconciled by hand.
+- **Releases are tags cut on `main`.** GitHub Actions builds, signs and publishes the
+  release from the tag, and refuses a tag that is not on `main`. The steps are in
+  [docs/RELEASING.md](docs/RELEASING.md).
+
 ## The pitch
 
 > **uBixShepherd** is one place to run all my AI agents. Instead of juggling separate
