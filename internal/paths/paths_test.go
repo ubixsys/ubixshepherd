@@ -84,3 +84,15 @@ func TestHomeDefault(t *testing.T) {
 		t.Errorf("Home() = %q, want ~/.shepherd", h)
 	}
 }
+
+func TestLayoutFiles(t *testing.T) {
+	l := Layout{Home: filepath.Join("h", "s")}
+	for got, want := range map[string]string{
+		l.Config(): "config.yaml", l.Store(): "shepherd.db", l.Log(): "daemon.log",
+		l.Console(): "daemon.out", l.Runtime(): "daemon.json",
+	} {
+		if got != filepath.Join("h", "s", want) {
+			t.Errorf("%s, want %s under the home", got, want)
+		}
+	}
+}
