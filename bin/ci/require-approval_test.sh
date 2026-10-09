@@ -78,6 +78,10 @@ scenario() {
 
 scenario owner-approved bob "alice" ""
 scenario self-mixed bob "Bob" ""
+scenario bash-approved zed "bash" ""
+scenario cwolsen-approved zed "cwolsen" ""
+scenario carol-approved zed "carol" ""
+scenario bob-approved zed "bob" ""
 scenario none bob "" ""
 scenario self-unset bob "bob" ""
 scenario other-approved bob "carol" ""
@@ -129,7 +133,13 @@ suite() {
     run self-mixed MERGE_APPROVAL_OWNERS='bob'; passes "approver case is ignored"
     run self-owner MERGE_APPROVAL_OWNERS='dave, bob'; passes "comma plus space separation passes"
     run self-owner MERGE_APPROVAL_OWNERS=$'dave\nbob'; passes "newline separation passes"
-    run self-owner MERGE_APPROVAL_OWNERS=$'dave\tbob'; passes "tab separation passes"
+    run self-owner MERGE_APPROVAL_OWNERS=$'dave\r\nbob\r\n'; passes "CRLF line endings pass"
+    run self-owner MERGE_APPROVAL_OWNERS=$'  bob \t'; passes "whitespace around an entry is trimmed"
+    run self-owner MERGE_APPROVAL_OWNERS=$' " bob " , dave'; passes "whitespace inside quotes is trimmed"
+    run self-owner MERGE_APPROVAL_OWNERS=$'dave\tbob'; fails "a tab is not a separator"
+    run self-owner MERGE_APPROVAL_OWNERS='dave bob'; fails "a space is not a separator: two names in one entry is one invalid entry"
+    says "a space-separated pair is invalid, not two owners" "holds no valid username"
+    run self-owner MERGE_APPROVAL_OWNERS='@@bob'; fails "only one leading @ is stripped"
     run self-owner MERGE_APPROVAL_OWNERS='bo'; fails "an owner is never matched as a substring (prefix)"
     run self-owner MERGE_APPROVAL_OWNERS='mbob'; fails "an owner is never matched as a substring (suffix)"
     # The three states of the owner list, each with its own message.
@@ -152,6 +162,20 @@ suite() {
     run owner-approved MERGE_APPROVAL_OWNERS='ALICE,alice,@alice'; says "duplicates count once" "Owners recognised: 1"
     run owner-approved MERGE_APPROVAL_OWNERS='ZZ-RAW-VALUE-ZZ!,Qq9#'; fails "a raw invalid value fails"
     case "$OUT" in *ZZ-RAW*|*Qq9*) check "the raw owner value never appears in the output" bad ;; *) check "the raw owner value never appears in the output" ok ;; esac
+    # The pasted shell command: no word of it may become an owner.
+    BROKEN='cwolsen bash bin/ci/require-approval.sh'
+    run bash-approved MERGE_APPROVAL_OWNERS="$BROKEN"; fails "the pasted command fails, and the user bash does not count"
+    says "the pasted command gets the no-valid-username message" "MERGE_APPROVAL_OWNERS is set (39 characters) but holds no valid username: usernames may contain only letters, digits, '.', '_' and '-'; separate them with commas."
+    says "the pasted command is not treated as unset" "Owners recognised: 0"
+    case "$OUT" in *"not set"*|*"fallback"*) check "the pasted command does not fall back" bad ;; *) check "the pasted command does not fall back" ok ;; esac
+    case "$OUT" in *cwolsen*|*require-approval.sh\ *) check "the pasted command is not echoed" bad ;; *) check "the pasted command is not echoed" ok ;; esac
+    run cwolsen-approved MERGE_APPROVAL_OWNERS="$BROKEN"; fails "the first word of the pasted command does not count either"
+    # One invalid entry beside a valid one: only the valid one counts.
+    run owner-approved MERGE_APPROVAL_OWNERS='alice bob,carol'; fails "'alice bob,carol': alice does not count"
+    says "'alice bob,carol' ignores one entry" "ignored 1 invalid entries; anyone listed in an ignored entry will NOT count as an owner"
+    says "'alice bob,carol' recognises one owner" "Owners recognised: 1"
+    run carol-approved MERGE_APPROVAL_OWNERS='alice bob,carol'; passes "'alice bob,carol': carol counts"
+    run bob-approved MERGE_APPROVAL_OWNERS='alice bob,carol'; fails "'alice bob,carol': bob does not count"
     run non-owner MERGE_APPROVAL_OWNERS=alice; fails "a sign-off by a non-owner does not count when owners are set"
     run thumbs-owner MERGE_APPROVAL_OWNERS=alice; passes "a thumbs-up by an owner passes"
     says "the log names the thumbs-up" "Thumbs-up from: alice"

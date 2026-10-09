@@ -9,13 +9,16 @@
 # Agents never approve, and never give the thumbs-up: a sign-off is a person's.
 #
 # Who counts:
-#   - MERGE_APPROVAL_OWNERS set (usernames separated by commas, spaces or newlines; case,
-#     quotes and a leading @ are ignored): only a sign-off by one of
-#     them counts, including on an MR they opened themselves (logged as a self sign-off).
+#   - MERGE_APPROVAL_OWNERS set (usernames separated by commas or newlines, never by
+#     spaces; case, whitespace around an entry, quotes and a leading @ are ignored): only
+#     a sign-off by one of them counts, including on an MR they opened themselves (logged
+#     as a self sign-off).
 #   - MERGE_APPROVAL_OWNERS unset or empty: a sign-off by anyone other than the MR's author.
 #   - MERGE_APPROVAL_OWNERS set but holding no valid username: the job fails and says so,
-#     rather than quietly applying the fallback. Entries that are not valid usernames are
-#     ignored and counted. Only counts and the length are logged, never the value.
+#     rather than quietly applying the fallback. An entry that is not a valid username (one
+#     with a space inside it is one invalid entry, not several names) is ignored and
+#     counted, and whoever it names does not count. Only counts and the length are logged,
+#     never the value.
 #
 # Reads GET .../merge_requests/:iid (author), .../approvals (approved_by; available on
 # every GitLab tier, unlike approval_state) and .../award_emoji (thumbs-up).
@@ -125,18 +128,27 @@ for n in out:
 clean() { grep -E '^[A-Za-z0-9_.-]+$' || true; }
 # GitLab usernames are case-insensitive: compare, and log, them lowercased.
 lower() { tr 'A-Z' 'a-z'; }
-# Owner entries: commas, spaces, tabs, newlines and carriage returns all separate; each
-# entry loses surrounding quotes and a leading @. Prints the non-empty entries, lowercased.
+# Owner entries are separated by commas and newlines only, never by spaces: a stray word in
+# the variable must not become an approver. A carriage return ending a line is dropped and
+# whitespace around an entry trimmed; an entry with whitespace inside it is one invalid
+# entry, not several words.
+TAB=$(printf '\t')
+CR=$(printf '\r')
+owner_tokens() {
+    printf '%s\n' "${MERGE_APPROVAL_OWNERS:-}" | tr ',' '\n' |
+        sed -E "s/${CR}\$//; s/^[ ${TAB}]+//; s/[ ${TAB}]+\$//" | grep -v '^$' || true
+}
+# Each token loses surrounding quotes and one leading @, then is lowercased. What is left
+# may still be invalid: `clean` decides.
 owner_entries() {
-    printf '%s\n' "${MERGE_APPROVAL_OWNERS:-}" | tr '\r,\t ' '\n\n\n\n' |
-        sed -E "s/^[\"']+//; s/[\"']+\$//; s/^@+//" | lower | grep -v '^$' || true
+    owner_tokens | sed -E "s/^[\"']+//; s/[\"']+\$//; s/^[ ${TAB}]+//; s/[ ${TAB}]+\$//; s/^@//" | lower
 }
 
 # Which owner rule applies, and say so: a set-but-broken allow-list must not look unset.
 # Only counts and the length are logged, never the value, which could be a misplaced secret.
 USERNAME_HELP="usernames may contain only letters, digits, '.', '_' and '-'; separate them with commas"
 OWNERS_RAW="${MERGE_APPROVAL_OWNERS:-}"
-OWNERS_TOTAL=$(printf '%s\n' "$OWNERS_RAW" | tr '\r,\t ' '\n\n\n\n' | grep -vc '^$' || true)
+OWNERS_TOTAL=$(owner_tokens | grep -vc '^$' || true)
 OWNERS_VALID=$(owner_entries | clean)
 OWNERS=$(printf '%s\n' "$OWNERS_VALID" | grep -v '^$' | sort -u || true)
 OWNERS_VALID_N=$(printf '%s\n' "$OWNERS_VALID" | grep -vc '^$' || true)
@@ -148,7 +160,7 @@ elif [ "$OWNERS_VALID_N" = 0 ]; then
     echo "Owners recognised: 0"
     fail "MERGE_APPROVAL_OWNERS is set (${#OWNERS_RAW} characters) but holds no valid username: ${USERNAME_HELP}."
 elif [ "$OWNERS_IGNORED" -gt 0 ]; then
-    echo "MERGE_APPROVAL_OWNERS: ignored ${OWNERS_IGNORED} invalid entries (${USERNAME_HELP})."
+    echo "MERGE_APPROVAL_OWNERS: ignored ${OWNERS_IGNORED} invalid entries; anyone listed in an ignored entry will NOT count as an owner (${USERNAME_HELP})."
 fi
 echo "Owners recognised: ${OWNERS_COUNT}"
 
