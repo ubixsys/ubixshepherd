@@ -62,7 +62,7 @@ func TestRoleEndpointMatrix(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	desk, _ := s.MintDesk()
+	desk, _ := s.MintDesk(false, "")
 
 	type want struct{ operator, desk, worker bool }
 	all, op, opDesk := want{true, true, true}, want{true, false, false}, want{true, true, false}
@@ -120,6 +120,12 @@ func TestRoleEndpointMatrix(t *testing.T) {
 		{"GET", api.PathRequests, nil, opDesk},
 		{"POST", api.PathRequests + "/1/route", map[string]any{}, opDesk},
 		{"POST", api.PathRequests + "/1/close", map[string]any{}, opDesk},
+		{"POST", api.PathDeskTurn, api.DeskTurn{Text: "hi"}, op},
+		{"GET", api.PathDeskHistory, nil, op},
+		{"GET", api.PathDeskStatus, nil, op},
+		{"POST", api.PathDeskInterrupt, nil, op},
+		{"POST", api.PathDeskNew, nil, op},
+		{"GET", api.PathDeskStream + "?probe", nil, op},
 		{"POST", api.PathShutdown, nil, op},
 	}
 	for _, c := range cases {
@@ -127,8 +133,8 @@ func TestRoleEndpointMatrix(t *testing.T) {
 			name, token string
 			allow       bool
 		}{{"desk", desk, c.want.desk}, {"worker", worker, c.want.worker}, {"operator", s.Token, c.want.operator}} {
-			if role.name == "operator" && (c.path == api.PathShutdown || c.path == api.PathSessionsImport) {
-				continue // leave the server running, and the person's own sessions unread
+			if role.name == "operator" && (c.path == api.PathShutdown || c.path == api.PathSessionsImport || strings.Contains(c.path, "?probe")) {
+				continue // leave the server running, the person's own sessions unread, and no stream open
 			}
 			code := call(t, ts, role.token, c.method, c.path, c.body, nil)
 			if denied(code) == role.allow {
@@ -140,16 +146,17 @@ func TestRoleEndpointMatrix(t *testing.T) {
 
 func TestDeskAnswersOnlyInAHumanTurn(t *testing.T) {
 	s, ts := newServer(t)
-	desk, _ := s.MintDesk()
-	human := false
-	f := func() bool { return human }
-	s.deskHuman.Store(&f)
-	if code := call(t, ts, desk, "POST", api.PathDecisions+"/1/answer", api.Answer{Answer: "yes"}, nil); code != http.StatusForbidden {
+	system, _ := s.MintDesk(false, "sess")
+	human, _ := s.MintDesk(true, "sess")
+	if code := call(t, ts, system, "POST", api.PathDecisions+"/1/answer", api.Answer{Answer: "yes"}, nil); code != http.StatusForbidden {
 		t.Errorf("system turn: %d, want 403", code)
 	}
-	human = true
-	if code := call(t, ts, desk, "POST", api.PathDecisions+"/1/answer", api.Answer{Answer: "yes"}, nil); denied(code) {
+	if code := call(t, ts, human, "POST", api.PathDecisions+"/1/answer", api.Answer{Answer: "yes"}, nil); denied(code) {
 		t.Errorf("human turn: %d, want allowed", code)
+	}
+	s.RevokeToken(human)
+	if code := call(t, ts, human, "GET", api.PathStatus, nil, nil); code != http.StatusUnauthorized {
+		t.Errorf("revoked desk token: %d, want 401", code)
 	}
 }
 

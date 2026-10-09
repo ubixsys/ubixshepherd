@@ -37,6 +37,10 @@ type principal struct {
 	Role string
 	// Run is the run a worker token belongs to.
 	Run int64
+	// Human says a desk token is for a turn the person started; Session is the desk's
+	// agent session, for the origin of what it opens.
+	Human   bool
+	Session string
 }
 
 type principalKey struct{}
@@ -98,14 +102,18 @@ func (s *Server) Revoke(runID int64) {
 	s.tokens.revoke(func(p principal) bool { return p.Role == RoleWorker && p.Run == runID })
 }
 
-// MintDesk returns a token for the front desk's operator tools.
-func (s *Server) MintDesk() (string, error) {
-	return s.tokens.mint(principal{Role: RoleDesk})
+// MintDesk returns a token for one turn of the front desk's operator tools (desk.Tokens).
+// Only a turn the person started may answer a decision.
+func (s *Server) MintDesk(human bool, session string) (string, error) {
+	return s.tokens.mint(principal{Role: RoleDesk, Human: human, Session: session})
 }
 
-// RevokeDesk ends every desk token.
-func (s *Server) RevokeDesk() {
-	s.tokens.revoke(func(p principal) bool { return p.Role == RoleDesk })
+// RevokeToken ends one scoped token (desk.Tokens).
+func (s *Server) RevokeToken(tok string) {
+	t := &s.tokens
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	delete(t.by, sha256.Sum256([]byte(tok)))
 }
 
 // URL is the daemon's API base, once it listens (dispatch.Credentials).
@@ -212,21 +220,12 @@ func clientName(r *http.Request) string {
 	return c
 }
 
-// deskTurnIsHuman says whether the front desk's turn in progress was started by the
-// person. With no desk running, no turn is.
-func (s *Server) deskTurnIsHuman() bool {
-	if f := s.deskHuman.Load(); f != nil {
-		return (*f)()
-	}
-	return false
-}
-
 // personsAnswer guards answering a decision. An answer is the person's: the front desk
 // records one only in a turn they started, never in one Shepherd started to tell it
 // about the swarm.
 func (s *Server) personsAnswer(h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if principalOf(r.Context()).Role == RoleDesk && !s.deskTurnIsHuman() {
+		if p := principalOf(r.Context()); p.Role == RoleDesk && !p.Human {
 			writeError(w, http.StatusForbidden, errors.New("the front desk may record an answer only in a turn the person started; bring the decision to them"))
 			return
 		}

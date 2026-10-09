@@ -24,6 +24,7 @@ import (
 	"github.com/ubixsys/ubixshepherd/internal/api"
 	"github.com/ubixsys/ubixshepherd/internal/config"
 	"github.com/ubixsys/ubixshepherd/internal/convo"
+	"github.com/ubixsys/ubixshepherd/internal/desk"
 	"github.com/ubixsys/ubixshepherd/internal/dispatch"
 	"github.com/ubixsys/ubixshepherd/internal/fold"
 	"github.com/ubixsys/ubixshepherd/internal/forge"
@@ -54,11 +55,20 @@ type Server struct {
 	sessLocks map[string]*sync.Mutex
 	live      atomic.Pointer[config.Config]
 	reloadMu  sync.Mutex
+	// DeskAgent runs the front desk's turns; nil is Claude Code. DeskGrace is how long
+	// the desk still wakes after its last client leaves; 0 is the default.
+	DeskAgent desk.Agent
+	DeskGrace time.Duration
+	// What runs in the background (see background): the front desk, the feed watcher,
+	// and the streams following them.
+	bgOnce, closeOnce        sync.Once
+	quit, bgDone             chan struct{}
+	desks                    *desk.Manager
+	hub                      *feedHub
+	deskStreams, feedStreams streamSlots
 	// tokens are the scoped tokens minted since start; addr is where the API listens.
 	tokens tokens
 	addr   atomic.Pointer[string]
-	// deskHuman says whether the daemon's front desk is in a turn the person started.
-	deskHuman atomic.Pointer[func() bool]
 }
 
 // NewServer returns a Server with a fresh random token.
@@ -108,6 +118,7 @@ func NewLogger() *slog.Logger {
 // Handler is the API, behind token authentication. Each route says which scoped roles
 // may call it (see auth.go); the operator token may call every one.
 func (s *Server) Handler() http.Handler {
+	s.background()
 	mux := http.NewServeMux()
 	handle := func(pattern string, a access, h http.HandlerFunc) { mux.HandleFunc(pattern, guard(a, h)) }
 	const desk, worker, own = forDesk, forWorker, ownRun
@@ -155,6 +166,13 @@ func (s *Server) Handler() http.Handler {
 	handle("GET "+api.PathRequests, desk, s.listRequests)
 	handle("POST "+api.PathRequests+"/{id}/route", desk, s.withRunner(s.routeRequest))
 	handle("POST "+api.PathRequests+"/{id}/close", desk, s.withRunner(s.closeRequest))
+	// The daemon's front desk: the person's alone (api/desk.go).
+	handle("POST "+api.PathDeskTurn, operatorOnly, s.deskTurn)
+	handle("GET "+api.PathDeskStream, operatorOnly, s.deskStream)
+	handle("GET "+api.PathDeskHistory, operatorOnly, s.deskHistory)
+	handle("GET "+api.PathDeskStatus, operatorOnly, s.deskStatus)
+	handle("POST "+api.PathDeskInterrupt, operatorOnly, s.deskInterrupt)
+	handle("POST "+api.PathDeskNew, operatorOnly, s.deskNew)
 	return s.logRequests(s.auth(mux))
 }
 
@@ -477,6 +495,13 @@ func (s *Server) fillOrigin(r *http.Request, o store.Origin) store.Origin {
 			}
 		} else {
 			o.Run = 0 // not a run this daemon knows: do not point at one
+		}
+	}
+	if p := principalOf(ctx); p.Role == RoleDesk {
+		// The daemon's own desk: its token says which session it is.
+		o.Via = store.OriginDesk
+		if o.Session == "" {
+			o.Session = p.Session
 		}
 	}
 	if o.Via == store.OriginDesk && o.Session == "" {
@@ -1441,6 +1466,7 @@ func (s *Server) Run(ctx context.Context, runtimePath string) error {
 		}()
 	}
 	srv := &http.Server{Handler: s.Handler(), ReadHeaderTimeout: 10 * time.Second}
+	defer s.Close()
 	errc := make(chan error, 1)
 	go func() { errc <- srv.Serve(ln) }()
 	s.Log.Info("shepherd daemon listening", "addr", rt.Addr, "version", rt.Version)
@@ -1451,9 +1477,11 @@ func (s *Server) Run(ctx context.Context, runtimePath string) error {
 	case <-ctx.Done():
 	case <-s.stop:
 	}
+	s.Log.Info("shepherd daemon stopping")
+	// End the streams and the desk's turn first: a stream would hold Shutdown open.
+	s.Close()
 	shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	s.Log.Info("shepherd daemon stopping")
 	return srv.Shutdown(shutdown)
 }
 
