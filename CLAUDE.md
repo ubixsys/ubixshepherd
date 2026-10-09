@@ -43,8 +43,8 @@ pack, never in the core (see `design.md` §3.12). The docs:
 Go, one binary (`cmd/shepherd`), packages under `internal/`. `make check` is the gate
 (gofmt, vet, tests, `core-boundary`); `make build` gives `bin/shepherd`, `make cross` the six
 release targets, `make dist` their release archives and `SHA256SUMS`. GitLab CI runs
-`public-boundary`, `go-check` and `go-cross`; GitHub Actions runs `make check` on Linux,
-macOS and (informational) Windows, and publishes releases.
+`public-boundary`, `go-check` and `go-cross`, then `promote-to-main` on `dev`; GitHub
+Actions runs `make check` on Linux, macOS and (informational) Windows, and publishes releases.
 
 - The daemon (`internal/daemon`) owns the store; the CLI is a client of the HTTP API
   (`internal/api`, `internal/client`) like every other client. Don't let a command open the
@@ -59,7 +59,8 @@ macOS and (informational) Windows, and publishes releases.
 - `shepherd mcp` (`internal/cli/mcp.go`) maps each MCP tool onto a CLI command and runs
   it with output captured. Add a tool by adding a command first, then its mapping.
 - `internal/dispatch` starts agents (`lane run`). Adapters for Claude Code, Copilot and
-  Cursor use the repo's `agent.permission_mode` (default `auto`) and push/merge autonomy.
+  Cursor use the repo's `agent.permission_mode` (default `auto`), `agent.model` and push/merge
+  autonomy. `desk.model` and `/model` choose the front desk's model.
   Agents can push when `autonomy.push: agent`; on GitLab, `autonomy.merge: agent` lets
   them arm merge-when-pipeline-succeeds, still subject to forge rules. `lane ship` is an
   explicit Shepherd ship for repos set to `push: shepherd`, after the repo gate passes;
@@ -74,9 +75,11 @@ macOS and (informational) Windows, and publishes releases.
   continuing the asking run's session (`dispatch.Runner.Answer`), at once or when the run
   ends. Never let an agent answer a decision: `decision_answer` takes the person's words.
 - Routing between lanes is `internal/dispatch/route.go`: deterministic rules start the
-  target agent or explain why they cannot. The dispatch core can close requests; requests
-  addressed to the person become decisions. The close operation is not yet exposed through
-  the CLI or MCP. Anything needing routing judgment waits for the front desk; `Route` runs
+  target agent or explain why they cannot. Requests
+  addressed to the person become decisions. `shepherd request close <id> [--why]`
+  (`runRequest` in `internal/cli/decision.go`), the `request_close` MCP tool and the desk's
+  tools close a stale request through `Runner.CloseRequest`, which refuses one already
+  replied to, failed or closed. Anything needing routing judgment waits for the front desk; `Route` runs
   whenever a run ends and when a quota hold lifts.
 - `shepherd chat` is `internal/chat`: a Bubble Tea model over the daemon's feed, with a
   front desk (`ClaudeDesk`) run headless and resumed per turn. The thread prints inline to
@@ -106,10 +109,14 @@ macOS and (informational) Windows, and publishes releases.
 ## Releases
 
 GitHub is the public home and where releases are published: the internal forge
-push-mirrors protected branches and tags to it, and `.github/workflows/release.yml` builds,
-signs (keyless cosign) and publishes a GitHub Release for each `v*` tag, with notes from
-its `CHANGELOG.md` section. A release is a changelog section landed on `dev`, then a tag
-pushed to the internal forge, never to GitHub. Read [docs/RELEASING.md](docs/RELEASING.md)
+push-mirrors protected branches and tags to it, GitHub's default branch is `main`, and
+`.github/workflows/release.yml` builds, signs (keyless cosign) and publishes a GitHub
+Release for each `v*` tag, with notes from its `CHANGELOG.md` section. It refuses a tag
+that is not on `main`. Work lands on `dev` by merge request; a green `dev` is
+fast-forwarded to `main` by a job on the internal forge (`bin/promote.sh`: never forced,
+refuses a diverged `main`); `main` is the protected release branch. A release is a
+changelog section landed on `dev` and promoted, then a tag cut on `main` and pushed to the
+internal forge, never to GitHub. Read [docs/RELEASING.md](docs/RELEASING.md)
 before cutting one, and [docs/VERSIONING.md](docs/VERSIONING.md) for what the number
 promises. Agents never tag or publish a release unasked.
 
@@ -138,8 +145,9 @@ stranger:
   to an unrelated company. No product's logic in the core.
 - **No secrets in the repo.** Credentials live in uBixVault.
 - **Agents never approve their own work**, here or in any repo Shepherd coordinates.
-- Default branch `dev`. Work on a branch (e.g. `docs/<topic>`) and land it on `dev` by MR,
-  with Conventional Commit style messages (`docs: ...`). Check for `AGENTS-COORD.md` before
+- Work lands on `dev`, the integration branch; `main` is the release branch and GitHub's
+  default, moved only by promotion and never pushed to by hand. Work on a branch (e.g.
+  `docs/<topic>`) and land it on `dev` by MR, with Conventional Commit style messages (`docs: ...`). Check for `AGENTS-COORD.md` before
   branching; none exists yet.
 - Related public repos: `ubixcore` (the framework, uBixOps, CI tooling), `ubixsys-web`
   (where uBix projects get a docs page once released).

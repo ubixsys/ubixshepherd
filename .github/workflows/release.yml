@@ -28,7 +28,27 @@ jobs:
     env:
       TAG: ${{ github.ref_name }}
     steps:
+      # Full history, so the tagged commit can be compared with origin/main.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Releases are cut on main. This applies to workflow_dispatch runs too: they run
+      # against a tag ref, so the same check covers them.
+      - name: The tag is on main
+        run: |
+          if ! git rev-parse --verify --quiet refs/remotes/origin/main >/dev/null; then
+            echo "origin/main does not exist here: cannot tell whether $TAG is on main. Refusing to release."
+            echo "If the mirror has not delivered main yet, re-run this workflow once it has."
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor HEAD origin/main; then
+            echo "$TAG ($(git rev-parse --short HEAD)) is not on main. Releases are tagged on main only."
+            echo "Nothing was published. Delete the tag, land the change on dev, wait for promotion, and tag main."
+            echo "If main is behind because the mirror is late, re-run this workflow once main has arrived."
+            exit 1
+          fi
+          echo "$TAG is on main."
 
       - uses: actions/setup-go@v5
         with:
