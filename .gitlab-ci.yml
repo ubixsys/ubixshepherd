@@ -1,3 +1,7 @@
+# The default stages plus promote, which runs last. The existing jobs stay in the default
+# test stage.
+stages: [build, test, deploy, promote]
+
 # The repo is public and mirrored, so nothing private may be committed. The pattern of
 # private names lives in the PUBLIC_BOUNDARY_PATTERN CI variable (project settings, not the
 # repo, so the list itself is not published). The job prints file and line only, never the
@@ -48,3 +52,21 @@ go-cross:
   artifacts:
     paths: [dist/]
     expire_in: 1 week
+
+# dev -> main. main only ever moves by fast-forward from a green dev (bin/promote.sh, which
+# fails closed and never forces). Runs only on a push pipeline of the dev branch, and only
+# once all three checks above have passed. The promotion's own push to main starts a pipeline
+# on main, where this rule does not match, so it cannot promote again. Needs the
+# GITLAB_PROMOTE_TOKEN CI variable (masked and protected).
+promote-to-main:
+  stage: promote
+  tags: [shell]
+  needs: [public-boundary, go-check, go-cross]
+  resource_group: promote-main   # two quick pushes to dev cannot promote at once
+  interruptible: false
+  variables:
+    GIT_DEPTH: "0"               # the fast-forward test needs full history
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "dev" && $CI_PIPELINE_SOURCE == "push"'
+  script:
+    - bash bin/promote.sh
