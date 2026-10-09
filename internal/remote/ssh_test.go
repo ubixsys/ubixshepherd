@@ -227,7 +227,7 @@ func TestClassifyReadFailures(t *testing.T) {
 		{"resolve", 255, "ssh: Could not resolve hostname build.example: Name or service not known", []string{"cannot reach build", "resolve"}, nil},
 		{"auth", 255, "me@build.example: Permission denied (publickey).", []string{"could not authenticate", "key", "ssh-agent"}, []string{"StrictHostKeyChecking"}},
 		{"unknown host key", 255, "Host key verification failed.", []string{"does not trust build", "known_hosts", "ssh me@build.example"}, []string{"StrictHostKeyChecking", "-o"}},
-		{"changed host key", 255, "@@@ WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED! @@@\nHost key verification failed.", []string{"host key for build has changed", "intercepting"}, []string{"StrictHostKeyChecking", "UserKnownHostsFile"}},
+		{"changed host key", 255, "@@@ WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED! @@@\nHost key verification failed.", []string{"host key for build has changed", "intercepting", "ssh-keygen -R build.example`"}, []string{"StrictHostKeyChecking", "UserKnownHostsFile"}},
 		{"missing daemon.json", 1, "cat: /home/me/.shepherd/daemon.json: No such file or directory", []string{"no daemon.json on build", "is the daemon running", "ssh me@build.example shepherd daemon status"}, nil},
 		{"other remote failure", 2, "boom", []string{"exit 2", "boom"}, nil},
 	} {

@@ -97,7 +97,7 @@ func (s *SSH) classify(err error, stderr, token string) error {
 		return errors.New("ssh is not installed or not on PATH; remote hosts are reached with ssh")
 	case hostKeyChanged(low):
 		return fmt.Errorf("the ssh host key for %s has changed: someone may be intercepting the connection, or the host was reinstalled. "+
-			"Check with its owner; if the change is expected, remove the old key with `ssh-keygen -R <host>` and connect once with ssh to accept the new one", host)
+			"Check with its owner; if the change is expected, remove the old key with `ssh-keygen -R %s` and connect once with ssh to accept the new one", host, hostOnly(s.Target.Dest))
 	case strings.Contains(low, "host key verification failed"):
 		return fmt.Errorf("ssh does not trust %s yet (its host key is not in known_hosts): connect once with `ssh %s` and check the fingerprint it shows", host, s.Target.Dest)
 	case strings.Contains(low, "permission denied") || strings.Contains(low, "too many authentication failures"):
@@ -133,4 +133,12 @@ func (s *SSH) classifyTunnel(err error, stderr, token string) error {
 func hostKeyChanged(low string) bool {
 	return strings.Contains(low, "remote host identification has changed") ||
 		strings.Contains(low, "host key for") && strings.Contains(low, "has changed")
+}
+
+// hostOnly is the host part of an ssh destination: no user, no brackets.
+func hostOnly(dest string) string {
+	if i := strings.LastIndex(dest, "@"); i >= 0 {
+		dest = dest[i+1:]
+	}
+	return strings.Trim(dest, "[]")
 }

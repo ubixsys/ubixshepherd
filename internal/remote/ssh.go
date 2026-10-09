@@ -334,7 +334,7 @@ func (s *SSH) readRuntime(ctx context.Context) (RuntimeInfo, error) {
 	}
 	rt, err := ParseRuntime(out)
 	if err != nil {
-		return RuntimeInfo{}, fmt.Errorf("%s:%s/daemon.json: %w (is the daemon there a different version?)",
+		return RuntimeInfo{}, fmt.Errorf("%s:%s/daemon.json: %w",
 			s.Target.Label(), s.Target.Home, err)
 	}
 	return rt, nil
