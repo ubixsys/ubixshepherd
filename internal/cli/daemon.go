@@ -20,6 +20,7 @@ import (
 	"github.com/ubixsys/ubixshepherd/internal/config"
 	"github.com/ubixsys/ubixshepherd/internal/daemon"
 	"github.com/ubixsys/ubixshepherd/internal/dispatch"
+	"github.com/ubixsys/ubixshepherd/internal/git"
 	"github.com/ubixsys/ubixshepherd/internal/paths"
 	"github.com/ubixsys/ubixshepherd/internal/service"
 	"github.com/ubixsys/ubixshepherd/internal/store/sqlite"
@@ -81,6 +82,10 @@ func runDaemon(ctx context.Context, env Env, args []string) error {
 // daemonRun runs the daemon in the foreground until interrupted or asked to stop.
 func daemonRun(ctx context.Context, env Env) error {
 	l := env.Layout
+	// Fail loudly: on a git older than the minimum the push block silently does not apply.
+	if err := git.CheckVersion(ctx, git.MinVersion); err != nil {
+		return err
+	}
 	if c, err := connect(ctx, env); err == nil {
 		st, _ := c.Status(ctx)
 		return fmt.Errorf("a daemon is already running (pid %d, version %s); a command or make install started it in the background.\n"+

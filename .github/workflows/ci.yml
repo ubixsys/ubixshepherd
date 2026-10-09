@@ -48,6 +48,36 @@ jobs:
       - name: make check
         run: make check
 
+  # The oldest git Shepherd supports (README: 2.31). Ubuntu 22.04 ships 2.34.1, so the
+  # suite runs against a real old git, not only the runner's current one. Tests that need
+  # a newer git than that fail here.
+  old-git:
+    name: tests on old git (ubuntu 22.04)
+    runs-on: ubuntu-latest
+    container: ubuntu:22.04
+    steps:
+      - name: Install git and make
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends git make ca-certificates
+          git --version
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
+      - name: Check the git version
+        run: |
+          v="$(git --version)"
+          echo "$v"
+          case "$v" in "git version 2.34."*) ;; *) echo "expected the distro git 2.34.x" >&2; exit 1 ;; esac
+
+      - name: make check
+        run: make check
+
   # The gitleaks binary, run directly: the gitleaks-action needs a licence for
   # organisations. Pinned to a release and checked against that release's published
   # SHA-256 before it runs. Findings are redacted in the log.

@@ -41,12 +41,20 @@ A `go install` build reports the module version Go recorded (`v0.1.0-beta.1` abo
 
 **From source:** clone the repo and run `make install` (below).
 
-Shepherd needs git, and the CLIs of the agents you want it to start (`claude`, `copilot`,
+Shepherd needs **git 2.31 or newer**, and the CLIs of the agents you want it to start (`claude`, `copilot`,
 `cursor-agent`) and of your forge (`glab`), each logged in on this machine.
+
+**Why 2.31.** Shepherd blocks an agent's pushes by handing git rewrite rules through
+`GIT_CONFIG_COUNT` and `GIT_CONFIG_KEY_n`/`GIT_CONFIG_VALUE_n`, and git before 2.31
+ignores those variables without a word: the block would silently not apply. The daemon
+checks `git --version` at start and refuses to run on an older git. Ubuntu 22.04 (git
+2.34), Debian 12 and later, and current macOS and Windows git builds are new enough;
+Ubuntu 20.04 (git 2.25) and Debian 11 (git 2.30) are not, so install a newer git there
+(for example the git-core PPA on Ubuntu).
 
 ## Build and run
 
-Needs Go (see `go.mod` for the version) and git.
+Needs Go (see `go.mod` for the version) and git 2.31 or newer.
 
 ```sh
 make build                  # bin/shepherd for this machine
