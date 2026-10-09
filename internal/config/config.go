@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"os"
 	"regexp"
@@ -25,6 +26,7 @@ import (
 // Config is the whole file.
 type Config struct {
 	Daemon   Daemon             `yaml:"daemon" json:"daemon"`
+	Desk     Desk               `yaml:"desk" json:"desk"`
 	Defaults Profile            `yaml:"defaults" json:"defaults"`
 	Repos    map[string]Profile `yaml:"repos" json:"repos,omitempty"`
 }
@@ -46,6 +48,16 @@ type Daemon struct {
 	// LogLevel is what the daemon logs: debug, info, warn or error (one of LogLevels).
 	LogLevel string `yaml:"log_level" json:"log_level"`
 }
+
+// Desk holds the front desk's settings (shepherd chat).
+type Desk struct {
+	// Model is the desk's model when the chat is given no --model and none was set
+	// with /model; "" leaves it to Claude Code's default.
+	Model string `yaml:"model" json:"model,omitempty"`
+}
+
+// Agents are the agent CLIs Shepherd can start.
+var Agents = []string{"claude", "copilot", "cursor"}
 
 // LogLevels are daemon.log_level's choices, quietest last.
 var LogLevels = []string{"debug", "info", "warn", "error"}
@@ -174,6 +186,15 @@ type AgentOpts struct {
 	// acceptEdits, default or bypassPermissions. Copilot takes auto and bypassPermissions
 	// as allowing every tool; Cursor always runs with --force.
 	PermissionMode string `yaml:"permission_mode,omitempty" json:"permission_mode,omitempty"`
+	// Model is the model each agent runs on when lane run names none, by agent
+	// (claude, copilot, cursor); an agent left out uses its CLI's own default. A repo's
+	// entries replace the defaults' for the same agent.
+	Model map[string]string `yaml:"model,omitempty" json:"model,omitempty"`
+}
+
+// badModel says a model name is not one: blank around it, or with spaces inside.
+func badModel(m string) bool {
+	return m != strings.TrimSpace(m) || strings.ContainsAny(m, " \t\n")
 }
 
 // Autonomy records what agents may do unasked in a repo.
@@ -253,6 +274,7 @@ func Parse(b []byte) (Config, error) {
 	if file.Daemon.LogLevel != "" {
 		c.Daemon.LogLevel = file.Daemon.LogLevel
 	}
+	c.Desk = file.Desk
 	c.Defaults = merge(c.Defaults, file.Defaults)
 	c.Repos = file.Repos
 	return c, c.Validate()
@@ -278,6 +300,9 @@ func (c Config) Validate() error {
 	}
 	if !slices.Contains(LogLevels, c.Daemon.LogLevel) {
 		errs = append(errs, fmt.Errorf("daemon.log_level: %q is not %s", c.Daemon.LogLevel, strings.Join(LogLevels, ", ")))
+	}
+	if badModel(c.Desk.Model) {
+		errs = append(errs, fmt.Errorf("desk.model: %q is not a model name", c.Desk.Model))
 	}
 	if c.Daemon.MaxRuns < 1 {
 		errs = append(errs, fmt.Errorf("daemon.max_runs: %d; at least 1", c.Daemon.MaxRuns))
@@ -326,6 +351,14 @@ func (p Profile) validate(at string) []error {
 	if p.Tags != TagsFree && p.Tags != TagsReserved {
 		errs = append(errs, fmt.Errorf("%s.tags: %q is not %s or %s", at, p.Tags, TagsFree, TagsReserved))
 	}
+	for agent, m := range p.Agent.Model {
+		if !slices.Contains(Agents, agent) {
+			errs = append(errs, fmt.Errorf("%s.agent.model: %q is not claude, copilot or cursor", at, agent))
+		}
+		if m == "" || badModel(m) {
+			errs = append(errs, fmt.Errorf("%s.agent.model.%s: %q is not a model name", at, agent, m))
+		}
+	}
 	if !slices.Contains([]string{Human, Shepherd, Agent}, p.Autonomy.Push) {
 		errs = append(errs, fmt.Errorf("%s.autonomy.push: %q is not %s, %s or %s", at, p.Autonomy.Push, Human, Shepherd, Agent))
 	}
@@ -352,7 +385,7 @@ func (p Profile) validate(at string) []error {
 		if f.After != Published && f.After != Tagged {
 			errs = append(errs, fmt.Errorf("%s.after: %q is not %s or %s", at, f.After, Published, Tagged))
 		}
-		if !slices.Contains([]string{"claude", "copilot", "cursor"}, f.Agent) {
+		if !slices.Contains(Agents, f.Agent) {
 			errs = append(errs, fmt.Errorf("%s.agent: %q is not claude, copilot or cursor", at, f.Agent))
 		}
 	}
@@ -416,6 +449,14 @@ func merge(base, over Profile) Profile {
 	}
 	if over.Agent.PermissionMode != "" {
 		out.Agent.PermissionMode = over.Agent.PermissionMode
+	}
+	if len(over.Agent.Model) > 0 {
+		m := maps.Clone(base.Agent.Model)
+		if m == nil {
+			m = map[string]string{}
+		}
+		maps.Copy(m, over.Agent.Model)
+		out.Agent.Model = m
 	}
 	if over.Follows != nil {
 		out.Follows = over.Follows

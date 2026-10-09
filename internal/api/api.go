@@ -148,9 +148,11 @@ func (f Feed) Event(i int) string {
 	return EventKind(f.Items[i].Kind)
 }
 
-// Setting is a setting's value.
+// Setting is a setting's value. Configured, on a read, is what config.yaml says for a
+// setting that overrides it (desk.model), used when Value is empty.
 type Setting struct {
-	Value string `json:"value"`
+	Value      string `json:"value"`
+	Configured string `json:"configured,omitempty"`
 }
 
 // PathRequests lists requests between lanes (GET).

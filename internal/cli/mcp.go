@@ -155,7 +155,7 @@ func mcpTools() []mcpTool {
 				"lane":        map[string]any{"type": "string", "description": "The lane's name; open it first with lane_open."},
 				"agent":       map[string]any{"type": "string", "enum": []string{"claude", "copilot", "cursor"}},
 				"task":        map[string]any{"type": "string", "description": "What the agent should do, as you would brief a colleague. Shepherd adds the lane, scope and rules."},
-				"model":       map[string]any{"type": "string", "description": "Model, if not the agent's default."},
+				"model":       map[string]any{"type": "string", "description": "Model, if not the repo's default for this agent (agent.model in its profile) or the agent's own."},
 				"new_session": map[string]any{"type": "boolean", "description": "Start a new conversation. By default the lane keeps its conversation: the run continues the lane's last session with this agent."},
 			}, "repo", "lane", "agent", "task"),
 			args: func(a map[string]any) ([]string, error) {

@@ -20,7 +20,7 @@ import (
 func laneRun(ctx context.Context, env Env, args []string) error {
 	fs := flags("lane run", env)
 	agent := fs.String("agent", "", "agent to start: "+strings.Join(dispatch.AgentNames(), ", "))
-	model := fs.String("model", "", "model, if not the agent's default")
+	model := fs.String("model", "", "model (default: the repo's agent.model for this agent, else the agent's own)")
 	repo := fs.String("repo", "", "repo, by its name in the workspace")
 	detach := fs.Bool("detach", false, "start it and return; follow later with shepherd run logs -f")
 	fresh := fs.Bool("new", false, "start a new conversation instead of continuing the lane's last one with this agent")

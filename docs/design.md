@@ -290,6 +290,13 @@ A model choosing the model would be more flexible on day one and impossible to p
 audit. The table starts dumber and gets better from measured outcomes, which is the same
 trade uBixCore makes everywhere else.
 
+Until the table exists, models are plain settings. A run uses the model it is started
+with, else the one the run it continues used, else the repo profile's `agent.model` for
+its agent (a map such as `{claude: sonnet}`, a repo's entries over the defaults'), else
+the agent CLI's own default. The front desk uses the chat's `--model` flag, else the
+override set with `/model` in the chat, else `desk.model` in `config.yaml`, else Claude
+Code's default.
+
 ### 3.12 Packs: useful to anyone, best with uBixCore
 
 Shepherd is aimed at uBixCore and built for everyone. The core knows no product, framework

@@ -236,6 +236,11 @@ func (r *Runner) Start(ctx context.Context, req StartRequest) (store.Run, error)
 	if err != nil {
 		return store.Run{}, err
 	}
+	// The model: the one asked for, else the continued run's, else the repo's
+	// agent.model for this agent, else the agent's own default.
+	if req.Model == "" {
+		req.Model = cfg.Profile(repo.Name).Agent.Model[ad.Name]
+	}
 
 	r.mu.Lock()
 	defer r.mu.Unlock()

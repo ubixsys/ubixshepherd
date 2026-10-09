@@ -28,6 +28,7 @@ type API interface {
 	Requests(ctx context.Context, states string) ([]api.RequestView, error)
 	Answer(ctx context.Context, id int64, answer string) (store.Decision, error)
 	Setting(ctx context.Context, key string) (string, error)
+	SettingInfo(ctx context.Context, key string) (api.Setting, error)
 	SetSetting(ctx context.Context, key, value string) error
 	SpendToday(ctx context.Context) (api.SpendToday, error)
 	AddSpend(ctx context.Context, sp store.Spend) error
@@ -41,7 +42,11 @@ type Redialer interface {
 }
 
 // Settings the chat keeps in the daemon.
-const settingSession = "desk.session"
+const (
+	settingSession = "desk.session"
+	// settingModel is the desk's model set with /model, over desk.model in config.yaml.
+	settingModel = "desk.model"
+)
 
 // autoKinds are feed items that continue the desk on their own when it is idle: they
 // usually need someone to act. A finished run is run_ended from an older daemon, and
@@ -79,8 +84,12 @@ type Model struct {
 	ctx       context.Context
 	api       API
 	desk      Desk
-	deskName  string
 	workspace store.Workspace
+
+	// ModelFlag is the --model the chat was started with; it wins over the rest.
+	ModelFlag string
+	// model is the desk.model setting and the config value under it, as last read.
+	model api.Setting
 
 	// HistoryItems is how many earlier entries to print when the chat starts.
 	HistoryItems   int
@@ -155,13 +164,9 @@ func New(ctx context.Context, a API, d Desk, ws store.Workspace) *Model {
 	in.SetHeight(2)
 	in.CharLimit = 8000
 	in.Focus()
-	name := ""
-	if n, ok := d.(interface{ Name() string }); ok {
-		name = n.Name()
-	}
 	now := time.Now()
 	return &Model{
-		ctx: ctx, api: a, desk: d, deskName: name, workspace: ws, HistoryItems: DefaultHistory, auto: true, input: in,
+		ctx: ctx, api: a, desk: d, workspace: ws, HistoryItems: DefaultHistory, auto: true, input: in,
 		println: tea.Println, lastFeed: -1, lastActivity: now, clock: time.Now, tick: tea.Tick, focused: true,
 		seenUntil: now,
 	}
@@ -194,6 +199,86 @@ type panelMsg struct {
 	sessionsUpdated bool
 }
 
+// modelMsg is the desk.model setting as read; show says to tell the person.
+type modelMsg struct {
+	setting api.Setting
+	show    bool
+}
+
+// modelDesk is a desk that can run on a chosen model.
+type modelDesk interface {
+	WithModel(model string) Desk
+}
+
+// deskModel is the desk's model and where it comes from: the --model flag, then the
+// override set with /model, then desk.model in config.yaml, then Claude Code's own
+// default (model "").
+func deskModel(flag string, s api.Setting) (model, from string) {
+	switch {
+	case flag != "":
+		return flag, "the --model flag"
+	case s.Value != "":
+		return s.Value, "set with /model"
+	case s.Configured != "":
+		return s.Configured, "desk.model in config.yaml"
+	}
+	return "", "Claude Code's default"
+}
+
+// currentDesk is the desk on the model in force.
+func (m *Model) currentDesk() Desk {
+	if md, ok := m.desk.(modelDesk); ok {
+		model, _ := deskModel(m.ModelFlag, m.model)
+		return md.WithModel(model)
+	}
+	return m.desk
+}
+
+// deskName says what the desk runs on, for the status line.
+func (m *Model) deskName() string {
+	if n, ok := m.currentDesk().(interface{ Name() string }); ok {
+		return n.Name()
+	}
+	return ""
+}
+
+// loadModel reads the desk.model setting. A daemon too old to have it leaves the
+// model to the flag and Claude Code; that is said only when the person asked.
+func (m *Model) loadModel(show bool) tea.Cmd {
+	return func() tea.Msg {
+		s, err := m.api.SettingInfo(m.ctx, settingModel)
+		if err != nil {
+			if show {
+				return errorMsg{err}
+			}
+			return nil
+		}
+		return modelMsg{setting: s, show: show}
+	}
+}
+
+// setModel stores the /model override ("" clears it), then reads it back to show.
+func (m *Model) setModel(model string) tea.Cmd {
+	return func() tea.Msg {
+		if err := m.api.SetSetting(m.ctx, settingModel, model); err != nil {
+			return errorMsg{err}
+		}
+		return m.loadModel(true)()
+	}
+}
+
+func (m *Model) modelText() string {
+	model, from := deskModel(m.ModelFlag, m.model)
+	if model == "" {
+		model = "not set"
+	}
+	text := fmt.Sprintf("The desk's model: %s (%s).", model, from)
+	if m.ModelFlag != "" && m.model.Value != "" {
+		text += fmt.Sprintf(" The /model setting, %s, applies when the chat starts without --model.", m.model.Value)
+	}
+	return text + " /model <name> sets it for the next turn on; /model reset goes back to config.yaml."
+}
+
 type deskLineMsg Line
 
 type deskDoneMsg struct {
@@ -218,7 +303,7 @@ func (m *Model) Init() tea.Cmd {
 	m.lastPanelPoll = now
 	m.lastSessionsPoll = now
 	m.loadingHistory = true
-	return tea.Batch(textarea.Blink, m.loadHistory(), m.openDecisions(), m.pollPanel(true), m.scheduleTick(m.feedInterval(now)))
+	return tea.Batch(textarea.Blink, m.loadHistory(), m.openDecisions(), m.pollPanel(true), m.loadModel(false), m.scheduleTick(m.feedInterval(now)))
 }
 
 func (m *Model) openDecisions() tea.Cmd {
@@ -534,6 +619,11 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		m.refreshPager()
 	case lineMsg:
 		m.add(Line(msg))
+	case modelMsg:
+		m.model = msg.setting
+		if msg.show {
+			m.add(Line{Kind: KindInfo, Text: m.modelText()})
+		}
 	case errorMsg:
 		if m.loadingHistory && !isConnErr(msg.err) {
 			// History could not be read; the chat goes on from now. (When the daemon is
@@ -636,6 +726,7 @@ func (m *Model) handle(text string) tea.Cmd {
 			"/sessions   your adopted conversations; /attach <id> reopens one here, /ask <id> <question> asks it\n" +
 			"/decisions   decisions waiting for you\n/log <run>   a run's live output (q to come back)\n" +
 			"/auto on|off   let swarm events reach the desk on their own (on)\n/new   start a new conversation with the desk\n" +
+			"/model [<name>|reset]   the desk's model: show it, set it, or go back to config.yaml\n" +
 			"/quit   leave (Ctrl-C too)\n" +
 			"The dock above the input: what needs you, what is broken, to review, working, and done since you last looked. Ctrl-G clears done; opening a run's log does too.\n" +
 			"The conversation is printed into your terminal: scroll, search, select and copy there as usual.\n" +
@@ -646,6 +737,16 @@ func (m *Model) handle(text string) tea.Cmd {
 		m.session = ""
 		m.add(Line{Kind: KindInfo, Text: "The next message starts a new conversation with the desk."})
 		return func() tea.Msg { m.api.SetSetting(m.ctx, settingSession, ""); return nil }
+	case "/model":
+		switch {
+		case len(f) == 1:
+			return m.loadModel(true)
+		case len(f) == 2 && f[1] == "reset":
+			return m.setModel("")
+		case len(f) == 2:
+			return m.setModel(f[1])
+		}
+		m.add(Line{Kind: KindError, Text: "usage: /model [<name>|reset]"})
 	case "/auto":
 		if len(f) == 2 && (f[1] == "on" || f[1] == "off") {
 			m.auto = f[1] == "on"
@@ -828,9 +929,9 @@ func (m *Model) send(text string) tea.Cmd {
 	m.busy, m.busySince, m.partial, m.lastTool = true, m.clock(), "", ""
 	ch := make(chan tea.Msg, 64)
 	m.deskCh = ch
-	session := m.session
+	session, desk := m.session, m.currentDesk()
 	go func() {
-		s, err := m.desk.Turn(m.ctx, session, text, func(l Line) { ch <- deskLineMsg(l) })
+		s, err := desk.Turn(m.ctx, session, text, func(l Line) { ch <- deskLineMsg(l) })
 		ch <- deskDoneMsg{s, err}
 	}()
 	return waitDesk(ch)
@@ -1024,8 +1125,8 @@ func (m *Model) statusLine() string {
 	default:
 		s = styleInfo.Render("○ desk ready")
 	}
-	if m.deskName != "" && !m.reconnecting {
-		s += styleInfo.Render(" · " + m.deskName)
+	if name := m.deskName(); name != "" && !m.reconnecting {
+		s += styleInfo.Render(" · " + name)
 	}
 	return s + styleInfo.Render(fmtUSD(m.spend.USD, m.spend.Budget, m.spend.Day))
 }

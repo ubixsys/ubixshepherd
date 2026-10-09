@@ -83,6 +83,7 @@ type fakeAPI struct {
 	feed       []store.FeedItem
 	answered   map[int64]string
 	settings   map[string]string
+	configured string // desk.model in config.yaml
 	ds         []api.DecisionView
 	lanes      []api.LaneView
 	runs       []api.RunView
@@ -151,6 +152,13 @@ func (f *fakeAPI) AskSession(_ context.Context, id, q string) (convo.Answer, err
 	return convo.Answer{Text: "The webhook secret is in Vault."}, nil
 }
 func (f *fakeAPI) Setting(_ context.Context, k string) (string, error) { return f.settings[k], nil }
+func (f *fakeAPI) SettingInfo(_ context.Context, k string) (api.Setting, error) {
+	s := api.Setting{Value: f.settings[k]}
+	if k == settingModel {
+		s.Configured = f.configured
+	}
+	return s, nil
+}
 func (f *fakeAPI) SetSetting(_ context.Context, k, v string) error {
 	f.settings[k] = v
 	return nil
@@ -491,5 +499,57 @@ func TestReconnectRetriesAndRestoresChat(t *testing.T) {
 	drive(t, m, cmd)
 	if m.Reconnecting() || a.redials != 2 {
 		t.Fatalf("reconnect did not recover: state %v, attempts %d", m.Reconnecting(), a.redials)
+	}
+}
+
+// The desk's model: the --model flag, then /model's setting, then config.yaml, then
+// Claude Code's default; /model shows which and where from, and sets or resets it.
+func TestModelCommand(t *testing.T) {
+	cases := []struct {
+		flag, set, configured, want, from string
+	}{
+		{"", "", "", "", "Claude Code's default"},
+		{"", "", "sonnet", "sonnet", "desk.model in config.yaml"},
+		{"", "opus", "sonnet", "opus", "set with /model"},
+		{"haiku", "opus", "sonnet", "haiku", "the --model flag"},
+	}
+	for _, c := range cases {
+		got, from := deskModel(c.flag, api.Setting{Value: c.set, Configured: c.configured})
+		if got != c.want || from != c.from {
+			t.Errorf("deskModel(%q, %q, %q) = %q, %q", c.flag, c.set, c.configured, got, from)
+		}
+	}
+
+	m, _, a := newTestModel()
+	a.configured = "sonnet"
+	m.desk = ClaudeDesk{Bin: "claude"}
+	drive(t, m, m.loadModel(false))
+	if d := m.currentDesk().(ClaudeDesk); d.Model != "sonnet" || m.deskName() != "claude · sonnet" {
+		t.Errorf("config's model not used: %+v %q", d, m.deskName())
+	}
+	typeLine(t, m, "/model")
+	if !has(m.Lines(), KindInfo, "The desk's model: sonnet (desk.model in config.yaml)") {
+		t.Errorf("/model: %+v", m.Lines())
+	}
+	typeLine(t, m, "/model opus")
+	if a.settings[settingModel] != "opus" || m.currentDesk().(ClaudeDesk).Model != "opus" ||
+		!has(m.Lines(), KindInfo, "The desk's model: opus (set with /model)") {
+		t.Errorf("/model opus: %q %+v", a.settings[settingModel], m.Lines())
+	}
+	if args := strings.Join(m.currentDesk().(ClaudeDesk).Args("S", "hi", false), " "); !strings.Contains(args, "--model opus") {
+		t.Errorf("the turn does not use the model: %s", args)
+	}
+	typeLine(t, m, "/model reset")
+	if a.settings[settingModel] != "" || m.currentDesk().(ClaudeDesk).Model != "sonnet" {
+		t.Errorf("/model reset: %q %+v", a.settings[settingModel], m.currentDesk())
+	}
+	m.ModelFlag = "haiku"
+	typeLine(t, m, "/model fable")
+	if m.currentDesk().(ClaudeDesk).Model != "haiku" || !has(m.Lines(), KindInfo, "The /model setting, fable, applies when the chat starts without --model") {
+		t.Errorf("the flag must win: %+v", m.Lines())
+	}
+	typeLine(t, m, "/model a b")
+	if !has(m.Lines(), KindError, "usage: /model") {
+		t.Error("bad /model not refused")
 	}
 }

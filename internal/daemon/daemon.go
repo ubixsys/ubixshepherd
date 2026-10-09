@@ -1197,7 +1197,7 @@ func (s *Server) feed(w http.ResponseWriter, r *http.Request) {
 }
 
 // Settings the daemon keeps for clients, by name; anything else is refused.
-var settingKeys = map[string]bool{"desk.session": true, "desk.agent": true}
+var settingKeys = map[string]bool{"desk.session": true, "desk.agent": true, "desk.model": true}
 
 func (s *Server) getSetting(w http.ResponseWriter, r *http.Request) {
 	key := r.PathValue("key")
@@ -1210,7 +1210,11 @@ func (s *Server) getSetting(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, api.Setting{Value: v})
+	out := api.Setting{Value: v}
+	if key == "desk.model" {
+		out.Configured = s.LiveConfig().Desk.Model
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (s *Server) putSetting(w http.ResponseWriter, r *http.Request) {
@@ -1223,6 +1227,12 @@ func (s *Server) putSetting(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &v) {
 		return
 	}
+	v.Value = strings.TrimSpace(v.Value)
+	if key == "desk.model" && strings.ContainsAny(v.Value, " \t\n") {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("%q is not a model name", v.Value))
+		return
+	}
+	v.Configured = ""
 	if err := s.Store.SetSetting(r.Context(), key, v.Value); err != nil {
 		s.fail(w, err)
 		return

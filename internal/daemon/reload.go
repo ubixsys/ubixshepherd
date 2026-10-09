@@ -106,6 +106,9 @@ func configChanges(old, next config.Config) string {
 	if d.LogLevel != n.LogLevel {
 		out = append(out, fmt.Sprintf("daemon.log_level %s to %s", d.LogLevel, n.LogLevel))
 	}
+	if old.Desk.Model != next.Desk.Model {
+		out = append(out, fmt.Sprintf("desk.model %q to %q", old.Desk.Model, next.Desk.Model))
+	}
 	if !reflect.DeepEqual(old.Defaults, next.Defaults) {
 		out = append(out, "defaults")
 	}

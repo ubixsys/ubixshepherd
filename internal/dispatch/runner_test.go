@@ -720,3 +720,34 @@ func TestRunQuotaAndInterruptedKinds(t *testing.T) {
 		t.Errorf("interrupted kind = %q", k)
 	}
 }
+
+// A run's model: the one asked for, else the repo's agent.model for its agent (a repo
+// entry over the defaults'), else none, which leaves the CLI's default.
+func TestModelFromProfile(t *testing.T) {
+	f := newFixture(t, "quick")
+	ctx := context.Background()
+	start := func(agent, model string) store.Run {
+		t.Helper()
+		run, err := f.runner.Start(ctx, StartRequest{LaneID: f.lane.ID, Agent: agent, Model: model, Prompt: "x", NewSession: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return f.wait(t, run.ID)
+	}
+	if run := start("claude", ""); run.Model != "" || strings.Contains(argsOf(t, run), "--model") {
+		t.Errorf("no model anywhere: %q %s", run.Model, argsOf(t, run))
+	}
+	cfg := config.Default()
+	cfg.Defaults.Agent.Model = map[string]string{"claude": "sonnet", "copilot": "gpt-5"}
+	cfg.Repos = map[string]config.Profile{"app": {Agent: config.AgentOpts{Model: map[string]string{"claude": "opus"}}}}
+	f.runner.SetConfig(cfg)
+	if run := start("claude", ""); run.Model != "opus" || !strings.Contains(argsOf(t, run), "--model opus") {
+		t.Errorf("repo's agent.model: %q %s", run.Model, argsOf(t, run))
+	}
+	if run := start("claude", "haiku"); run.Model != "haiku" {
+		t.Errorf("an explicit model must win: %q", run.Model)
+	}
+	if got := cfg.Profile("app").Agent.Model["copilot"]; got != "gpt-5" {
+		t.Errorf("the defaults' other agents are kept: %q", got)
+	}
+}

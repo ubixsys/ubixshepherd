@@ -241,6 +241,12 @@ func (c *Client) Setting(ctx context.Context, key string) (string, error) {
 	return out.Value, c.do(ctx, http.MethodGet, api.PathSettings+"/"+key, nil, &out)
 }
 
+// SettingInfo reads a setting with the configured value it overrides, if any.
+func (c *Client) SettingInfo(ctx context.Context, key string) (api.Setting, error) {
+	var out api.Setting
+	return out, c.do(ctx, http.MethodGet, api.PathSettings+"/"+key, nil, &out)
+}
+
 func (c *Client) SetSetting(ctx context.Context, key, value string) error {
 	var out api.Setting
 	return c.do(ctx, http.MethodPut, api.PathSettings+"/"+key, api.Setting{Value: value}, &out)

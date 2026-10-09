@@ -91,6 +91,12 @@ func (d ClaudeDesk) Args(session, message string, newSession bool) []string {
 	return a
 }
 
+// WithModel is the desk on another model; "" is Claude Code's default.
+func (d ClaudeDesk) WithModel(model string) Desk {
+	d.Model = model
+	return d
+}
+
 // Name says what the desk runs on, for the status line.
 func (d ClaudeDesk) Name() string {
 	if d.Model != "" {

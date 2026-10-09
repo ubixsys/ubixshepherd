@@ -71,6 +71,9 @@ func TestParseRejects(t *testing.T) {
 		"bad permission":    "defaults:\n  agent:\n    permission_mode: yolo\n",
 		"bad log level":     "daemon:\n  log_level: loud\n",
 		"log level case":    "daemon:\n  log_level: DEBUG\n",
+		"desk model spaces": "desk:\n  model: \"my model\"\n",
+		"model agent":       "defaults:\n  agent:\n    model: {gemini: pro}\n",
+		"model empty":       "repos:\n  x:\n    agent:\n      model: {claude: \"\"}\n",
 	}
 	for name, in := range cases {
 		if _, err := Parse([]byte(in)); err == nil {
@@ -129,5 +132,25 @@ func TestLogLevel(t *testing.T) {
 		if err != nil || c.Daemon.LogLevel != l {
 			t.Errorf("log_level %s: %q %v", l, c.Daemon.LogLevel, err)
 		}
+	}
+}
+
+func TestModels(t *testing.T) {
+	c, err := Parse([]byte("desk:\n  model: opus\ndefaults:\n  agent:\n    model: {claude: sonnet, cursor: auto}\n" +
+		"repos:\n  x:\n    agent:\n      model: {claude: opus}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Desk.Model != "opus" {
+		t.Errorf("desk.model = %q", c.Desk.Model)
+	}
+	if m := c.Profile("x").Agent.Model; m["claude"] != "opus" || m["cursor"] != "auto" {
+		t.Errorf("repo models = %v", m)
+	}
+	if m := c.Profile("y").Agent.Model; m["claude"] != "sonnet" {
+		t.Errorf("default models = %v", m)
+	}
+	if c.Defaults.Agent.Model["claude"] != "sonnet" {
+		t.Error("a repo's models changed the defaults'")
 	}
 }
