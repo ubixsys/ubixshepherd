@@ -12,7 +12,10 @@
 #   - MERGE_APPROVAL_OWNERS set (usernames separated by commas, spaces or newlines; case,
 #     quotes and a leading @ are ignored): only a sign-off by one of
 #     them counts, including on an MR they opened themselves (logged as a self sign-off).
-#   - MERGE_APPROVAL_OWNERS unset: a sign-off by anyone other than the MR's author.
+#   - MERGE_APPROVAL_OWNERS unset or empty: a sign-off by anyone other than the MR's author.
+#   - MERGE_APPROVAL_OWNERS set but holding no valid username: the job fails and says so,
+#     rather than quietly applying the fallback. Entries that are not valid usernames are
+#     ignored and counted. Only counts and the length are logged, never the value.
 #
 # Reads GET .../merge_requests/:iid (author), .../approvals (approved_by; available on
 # every GitLab tier, unlike approval_state) and .../award_emoji (thumbs-up).
@@ -129,6 +132,26 @@ owner_entries() {
         sed -E "s/^[\"']+//; s/[\"']+\$//; s/^@+//" | lower | grep -v '^$' || true
 }
 
+# Which owner rule applies, and say so: a set-but-broken allow-list must not look unset.
+# Only counts and the length are logged, never the value, which could be a misplaced secret.
+USERNAME_HELP="usernames may contain only letters, digits, '.', '_' and '-'; separate them with commas"
+OWNERS_RAW="${MERGE_APPROVAL_OWNERS:-}"
+OWNERS_TOTAL=$(printf '%s\n' "$OWNERS_RAW" | tr '\r,\t ' '\n\n\n\n' | grep -vc '^$' || true)
+OWNERS_VALID=$(owner_entries | clean)
+OWNERS=$(printf '%s\n' "$OWNERS_VALID" | grep -v '^$' | sort -u || true)
+OWNERS_VALID_N=$(printf '%s\n' "$OWNERS_VALID" | grep -vc '^$' || true)
+OWNERS_COUNT=$(printf '%s\n' "$OWNERS" | grep -vc '^$' || true)
+OWNERS_IGNORED=$((OWNERS_TOTAL - OWNERS_VALID_N))
+if [ "$OWNERS_TOTAL" = 0 ]; then
+    echo "MERGE_APPROVAL_OWNERS is not set: using the fallback rule (a sign-off from someone other than the author)."
+elif [ "$OWNERS_VALID_N" = 0 ]; then
+    echo "Owners recognised: 0"
+    fail "MERGE_APPROVAL_OWNERS is set (${#OWNERS_RAW} characters) but holds no valid username: ${USERNAME_HELP}."
+elif [ "$OWNERS_IGNORED" -gt 0 ]; then
+    echo "MERGE_APPROVAL_OWNERS: ignored ${OWNERS_IGNORED} invalid entries (${USERNAME_HELP})."
+fi
+echo "Owners recognised: ${OWNERS_COUNT}"
+
 get "$BASE" "$TMP/mr.json"
 AUTHOR=$(usernames author "$TMP/mr.json") || fail "the merge request reply is not the expected JSON."
 AUTHOR=$(printf '%s\n' "$AUTHOR" | clean | lower | head -n 1)
@@ -151,13 +174,12 @@ done
 
 SIGNERS=$(printf '%s\n%s\n' "$APPROVERS" "$THUMBS" | clean | sort -u)
 
-OWNERS=$(owner_entries | clean | sort -u)
 if [ -n "$OWNERS" ]; then
     COUNTED=$(printf '%s\n' "$SIGNERS" | grep -Fxf <(printf '%s\n' "$OWNERS") || true)
     rule="a sign-off from one of MERGE_APPROVAL_OWNERS"
 else
     COUNTED=$(printf '%s\n' "$SIGNERS" | grep -Fxv -- "$AUTHOR" || true)
-    rule="a sign-off from someone other than the author (MERGE_APPROVAL_OWNERS is unset)"
+    rule="a sign-off from someone other than the author (MERGE_APPROVAL_OWNERS is not set)"
 fi
 
 list() { if [ -n "$1" ]; then printf '%s\n' "$1" | paste -sd ',' - | sed 's/,/, /g'; else echo none; fi; }
