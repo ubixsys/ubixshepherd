@@ -31,6 +31,12 @@ protocol) is listed under **Interface changes** in the release that makes it.
   item with its event kind, resumable by id or `Last-Event-ID`, with a heartbeat every
   15 seconds and a limit on subscribers. `GET /v1/feed` is unchanged.
 
+### Fixed
+
+- Agents no longer inherit `SHEPHERD_CLIENT` from the daemon. A daemon started from
+  the front desk's tools passed `desk` on to every agent, so lanes an agent opened were
+  recorded as opened by the desk.
+
 ### Interface changes
 
 - The HTTP API answers 403 to a scoped token calling an endpoint its role does not
