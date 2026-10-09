@@ -18,11 +18,11 @@ import (
 )
 
 // heartbeat is how often a stream with nothing to say sends a comment, so proxies and
-// SSH port forwards keep it open and a client sees the daemon is there.
-const heartbeat = 15 * time.Second
+// SSH port forwards keep it open and a client sees the daemon is there. Tests shorten it.
+var heartbeat = 15 * time.Second
 
-// Stream limits: each subscriber holds a connection and a goroutine.
-const (
+// Stream limits: each subscriber holds a connection and a goroutine. Tests lower them.
+var (
 	maxDeskStreams = 16
 	maxFeedStreams = 32
 )

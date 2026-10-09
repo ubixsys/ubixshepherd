@@ -148,6 +148,7 @@ func (s *Server) Handler() http.Handler {
 	// The desk may answer only in a turn the person started: answerDecision checks.
 	handle("POST "+api.PathDecisions+"/{id}/answer", desk, s.personsAnswer(s.withRunner(s.answerDecision)))
 	handle("GET "+api.PathFeed, desk, s.feed)
+	handle("GET "+api.PathFeedStream, desk, s.feedStream)
 	handle("POST "+api.PathFoldImport, operatorOnly, s.foldImport)
 	handle("POST "+api.PathFoldView, operatorOnly, s.foldView)
 	handle("POST "+api.PathFoldReview, desk, s.foldReview)
