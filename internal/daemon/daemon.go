@@ -138,6 +138,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST "+api.PathRuns+"/{id}/requests", s.withRunner(s.addRequest))
 	mux.HandleFunc("GET "+api.PathRequests, s.listRequests)
 	mux.HandleFunc("POST "+api.PathRequests+"/{id}/route", s.withRunner(s.routeRequest))
+	mux.HandleFunc("POST "+api.PathRequests+"/{id}/close", s.withRunner(s.closeRequest))
 	mux.HandleFunc("POST "+api.PathDecisions+"/{id}/answer", s.withRunner(s.answerDecision))
 	return s.logRequests(s.auth(mux))
 }
@@ -809,6 +810,24 @@ func (s *Server) routeRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	q, err := s.Runner.RouteRequest(r.Context(), id, req.Lane, req.Agent)
+	if err != nil {
+		s.foldError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, q)
+}
+
+func (s *Server) closeRequest(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	var req api.CloseRequest
+	if !decode(w, r, &req) {
+		return
+	}
+	q, err := s.Runner.CloseRequest(r.Context(), id, req.Why)
 	if err != nil {
 		s.foldError(w, err)
 		return

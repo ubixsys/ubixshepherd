@@ -222,7 +222,7 @@ func TestRequestAddressing(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if p.State != RequestClosed || !strings.Contains(p.Note, "decision") {
+		if p.State != store.RequestClosed || !strings.Contains(p.Note, "decision") {
 			t.Errorf("request for the person = %+v", p)
 		}
 	}
@@ -235,7 +235,7 @@ func TestRequestAddressing(t *testing.T) {
 	if _, err := f.runner.CloseRequest(ctx, two.ID, "the docs lane was merged"); err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := f.st.Request(ctx, two.ID); got.State != RequestClosed || got.Note != "closed: the docs lane was merged" {
+	if got, _ := f.st.Request(ctx, two.ID); got.State != store.RequestClosed || got.Note != "closed: the docs lane was merged" {
 		t.Errorf("closed request = %+v", got)
 	}
 	waitFeed(t, f, fmt.Sprintf("request %d closed: the docs lane was merged", two.ID))

@@ -158,6 +158,12 @@ const PathRequests = "/v1/requests"
 
 func PathRunRequests(id int64) string  { return fmt.Sprintf("%s/%d/requests", PathRuns, id) }
 func PathRequestRoute(id int64) string { return fmt.Sprintf("%s/%d/route", PathRequests, id) }
+func PathRequestClose(id int64) string { return fmt.Sprintf("%s/%d/close", PathRequests, id) }
+
+// CloseRequest is the body of POST /v1/requests/{id}/close.
+type CloseRequest struct {
+	Why string `json:"why,omitempty"`
+}
 
 // Route is the body of POST /v1/requests/{id}/route.
 type Route struct {

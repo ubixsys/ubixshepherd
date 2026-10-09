@@ -208,6 +208,11 @@ func (c *Client) Requests(ctx context.Context, states string) ([]api.RequestView
 	return out, c.do(ctx, http.MethodGet, api.PathRequests+"?state="+url.QueryEscape(states), nil, &out)
 }
 
+func (c *Client) CloseRequest(ctx context.Context, id int64, why string) (store.Request, error) {
+	var out store.Request
+	return out, c.do(ctx, http.MethodPost, api.PathRequestClose(id), api.CloseRequest{Why: why}, &out)
+}
+
 func (c *Client) RouteRequest(ctx context.Context, id int64, lane, agent string) (store.Request, error) {
 	var out store.Request
 	return out, c.do(ctx, http.MethodPost, api.PathRequestRoute(id), api.Route{Lane: lane, Agent: agent}, &out)

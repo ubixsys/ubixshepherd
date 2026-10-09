@@ -232,6 +232,9 @@ const (
 	// RequestReplied: the reply went back into the asker's conversation.
 	RequestReplied = "replied"
 	RequestFailed  = "failed"
+	// RequestClosed: closed without a reply, by the person or because it went to them
+	// as a decision. Its note says which.
+	RequestClosed = "closed"
 )
 
 // Request is one agent asking, through Shepherd, for something from another lane.

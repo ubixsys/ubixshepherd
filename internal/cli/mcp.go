@@ -315,6 +315,25 @@ func mcpTools() []mcpTool {
 			},
 		},
 		{
+			Name:        "request_close",
+			Description: "Close a request between lanes without a reply: one gone stale or no longer needed. A target agent already working on it is left to finish, but its reply is not carried back. Say why; the reason is kept on the request.",
+			InputSchema: obj(map[string]any{
+				"id":  map[string]any{"type": "integer"},
+				"why": map[string]any{"type": "string", "description": "Why it is closed."},
+			}, "id"),
+			args: func(a map[string]any) ([]string, error) {
+				id, ok := a["id"].(float64)
+				if !ok {
+					return nil, fmt.Errorf("id must be a number")
+				}
+				out := []string{"request", "close", fmt.Sprint(int64(id))}
+				if w := str(a, "why"); w != "" {
+					out = append(out, "--why", w)
+				}
+				return out, nil
+			},
+		},
+		{
 			Name:        "fold_gc",
 			Description: "List worktrees across the workspace that look finished (merged, branch gone, missing) and lanes whose worktree is gone. Changes nothing.",
 			InputSchema: obj(map[string]any{}),
@@ -394,9 +413,10 @@ func workerTools() []mcpTool {
 		{
 			Name: "ask_shepherd",
 			Description: "Ask for something from another lane: a question to the agent working there, a hand-off of work outside your scope, or a review. " +
+				"Kind person is for the person instead, and becomes a decision for them, as ask_human does. " +
 				"Then end your turn: Shepherd continues this conversation with the reply.",
 			InputSchema: obj(map[string]any{
-				"kind":    map[string]any{"type": "string", "enum": []string{"question", "handoff", "review"}},
+				"kind":    map[string]any{"type": "string", "enum": []string{"question", "handoff", "review", "person"}},
 				"message": map[string]any{"type": "string", "description": "What you need, as you would ask a colleague."},
 				"lane":    map[string]any{"type": "string", "description": "The lane it is for, if you know it."},
 			}, "kind", "message"),

@@ -21,10 +21,6 @@ const (
 	KindPerson = "person"
 )
 
-// RequestClosed: closed without a reply, by the person or because it went to them as a
-// decision. Its note says which.
-const RequestClosed = "closed"
-
 // forPerson says a request is addressed to the person: its kind, or its lane naming them.
 func forPerson(q store.Request) bool {
 	switch strings.ToLower(strings.TrimSpace(q.Lane)) {
@@ -89,7 +85,7 @@ func (r *Runner) toPerson(ctx context.Context, q store.Request) (store.Request, 
 	if err != nil {
 		return q, err
 	}
-	q.Lane, q.State, q.Note = "", RequestClosed, fmt.Sprintf("for the person: held as decision %d", d.ID)
+	q.Lane, q.State, q.Note = "", store.RequestClosed, fmt.Sprintf("for the person: held as decision %d", d.ID)
 	q, err = r.Store.CreateRequest(ctx, q)
 	if err != nil {
 		return q, err
@@ -109,14 +105,14 @@ func (r *Runner) CloseRequest(ctx context.Context, id int64, why string) (store.
 	r.routeMu.Lock()
 	defer r.routeMu.Unlock()
 	switch q.State {
-	case store.RequestReplied, store.RequestFailed, RequestClosed:
+	case store.RequestReplied, store.RequestFailed, store.RequestClosed:
 		return q, refuse("request %d is %s already", q.ID, q.State)
 	}
 	why = strings.TrimSpace(why)
 	if why == "" {
 		why = "no reason given"
 	}
-	q.State, q.Note = RequestClosed, "closed: "+why
+	q.State, q.Note = store.RequestClosed, "closed: "+why
 	if err := r.Store.UpdateRequest(ctx, q); err != nil {
 		return q, err
 	}

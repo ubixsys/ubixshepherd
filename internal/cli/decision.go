@@ -115,7 +115,7 @@ func runWorker(ctx context.Context, env Env, args []string) error {
 	fs.Var(&options, "option", "ask-human: an option (repeatable)")
 	rec := fs.String("recommendation", "", "ask-human: what you recommend")
 	why := fs.String("why", "", "ask-human: why it is the person's call")
-	kind := fs.String("kind", "question", "ask-shepherd: question, handoff or review")
+	kind := fs.String("kind", "question", "ask-shepherd: question, handoff, review or person")
 	lane := fs.String("lane", "", "ask-shepherd: the lane it is for, if known")
 	pos, err := parse(fs, args[1:])
 	if err != nil {
@@ -205,6 +205,7 @@ func runRequest(ctx context.Context, env Env, args []string) error {
 	all := fs.Bool("all", false, "list finished requests too")
 	lane := fs.String("lane", "", "route: the target lane")
 	agent := fs.String("agent", "", "route: the agent to ask (default: the lane's, or another provider for a review)")
+	why := fs.String("why", "", "close: why it is closed")
 	pos, err := parse(fs, args[1:])
 	if err != nil {
 		return err
@@ -265,6 +266,20 @@ func runRequest(ctx context.Context, env Env, args []string) error {
 			fmt.Fprintf(env.Stdout, " (%s)", q.Note)
 		}
 		fmt.Fprintln(env.Stdout)
+		return nil
+	case "close":
+		if len(pos) != 1 {
+			return errUsage
+		}
+		id, err := strconv.ParseInt(pos[0], 10, 64)
+		if err != nil {
+			return fmt.Errorf("request id %q is not a number", pos[0])
+		}
+		q, err := c.CloseRequest(ctx, id, *why)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(env.Stdout, "request %d is %s (%s)\n", q.ID, q.State, q.Note)
 		return nil
 	}
 	return errUsage
