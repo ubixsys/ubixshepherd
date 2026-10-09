@@ -128,7 +128,14 @@ func (w *Watcher) published(ctx context.Context, repo, up store.Repo, tag string
 		w.once(up.ID, "follow forge", "watch: cannot check releases are published; set after: tagged to follow tags alone", "repo", up.Name, "why", err)
 		return false
 	}
+	host := hostOf(up)
+	if w.skipHost(host) {
+		return false
+	}
 	p, err := fg.RefPipeline(ctx, tag)
+	if !w.result(host, err) {
+		return false
+	}
 	if err != nil {
 		w.Log.Error("watch: tag pipeline", "repo", up.Name, "tag", tag, "err", err)
 		return false

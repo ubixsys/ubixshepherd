@@ -34,10 +34,13 @@ type Watcher struct {
 	Interval time.Duration
 	// ForgeFor returns a repo's forge; tests replace it.
 	ForgeFor func(remote string) (forge.Forge, error)
+	// Clock is the time, for the backoff from an unreachable host; tests replace it.
+	Clock func() time.Time
 
 	mu      sync.Mutex
-	skipped map[int64]bool  // repos with no readable forge, logged once
-	noted   map[string]bool // follow problems, logged once
+	skipped map[int64]bool        // repos with no readable forge, logged once
+	noted   map[string]bool       // follow problems, logged once
+	down    map[string]*hostState // forge hosts that did not answer, by host (backoff.go)
 }
 
 // Run checks every Interval until ctx is done.
@@ -84,9 +87,13 @@ func (w *Watcher) Check(ctx context.Context) {
 				}
 				continue
 			}
+			host := hostOf(repo)
 			for _, lane := range lanes {
-				if lane.State == store.LaneOpen {
-					w.checkLane(ctx, f, lane)
+				if lane.State != store.LaneOpen {
+					continue
+				}
+				if w.skipHost(host) || !w.result(host, w.checkLane(ctx, f, lane)) {
+					break
 				}
 			}
 		}
@@ -107,18 +114,22 @@ func (w *Watcher) feed(ctx context.Context, kind string, ref int64, format strin
 	}
 }
 
-func (w *Watcher) checkLane(ctx context.Context, f forge.Forge, lane store.Lane) {
+// checkLane reads a lane's merge request and acts on what changed. It returns the
+// forge's error, for the backoff; one from a host that answered is logged here.
+func (w *Watcher) checkLane(ctx context.Context, f forge.Forge, lane store.Lane) error {
 	mr, err := f.MRForBranch(ctx, lane.Branch)
 	if err != nil {
-		w.Log.Error("watch: merge request", "lane", lane.Name, "err", err)
-		return
+		if !forge.Unreachable(err) {
+			w.Log.Error("watch: merge request", "lane", lane.Name, "err", err)
+		}
+		return err
 	}
 	if mr == nil {
-		return
+		return nil
 	}
 	prev, err := w.Store.LaneForge(ctx, lane.ID)
 	if err != nil {
-		return
+		return nil
 	}
 	next := prev
 	next.MR, next.MRState, next.MRURL = mr.IID, mr.State, mr.URL
@@ -159,6 +170,7 @@ func (w *Watcher) checkLane(ctx context.Context, f forge.Forge, lane store.Lane)
 			w.Log.Error("watch: save", "lane", lane.Name, "err", err)
 		}
 	}
+	return nil
 }
 
 // merged closes the lane on the forge's proof, or says why it cannot.
