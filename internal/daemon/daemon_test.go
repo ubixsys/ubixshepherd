@@ -322,8 +322,19 @@ func TestLogLevelEnv(t *testing.T) {
 		"error": slog.LevelError, "loud": slog.LevelInfo,
 	} {
 		t.Setenv(LogLevelEnv, in)
-		if got := logLevel(); got != want {
+		if got := LogLevel(""); got != want {
 			t.Errorf("%s=%q: %v, want %v", LogLevelEnv, in, got, want)
+		}
+	}
+	// The variable overrides daemon.log_level; unset or unrecognised, the config wins.
+	t.Setenv(LogLevelEnv, "error")
+	if got := LogLevel("debug"); got != slog.LevelError {
+		t.Errorf("env over config: %v", got)
+	}
+	for _, env := range []string{"", "loud"} {
+		t.Setenv(LogLevelEnv, env)
+		if got := LogLevel("warn"); got != slog.LevelWarn {
+			t.Errorf("%s=%q, config warn: %v", LogLevelEnv, env, got)
 		}
 	}
 }

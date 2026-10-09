@@ -1,7 +1,9 @@
 package daemon
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -128,5 +130,34 @@ func TestReloadWhileReading(t *testing.T) {
 	<-done
 	if s.Fold.Conf().Daemon.MaxRuns != 2 || s.Runner.Conf().Daemon.MaxRuns != 2 {
 		t.Error("the reloaded config is not in force")
+	}
+}
+
+// A reload that changes daemon.log_level applies it to the running logger at once.
+func TestReloadLogLevel(t *testing.T) {
+	t.Setenv(LogLevelEnv, "")
+	s, path := reloadServer(t)
+	var buf bytes.Buffer
+	s.Level = new(slog.LevelVar)
+	s.Level.Set(LogLevel(s.Config.Daemon.LogLevel))
+	s.Log = newLogger(&buf, s.Level)
+	s.Log.Debug("hidden")
+	if err := os.WriteFile(path, []byte("daemon:\n  log_level: debug\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ReloadConfig(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	s.Log.Debug("shown")
+	if out := buf.String(); strings.Contains(out, "hidden") || !strings.Contains(out, "shown") {
+		t.Errorf("log after reload to debug:\n%s", out)
+	}
+	if got := lastFeed(t, s.Store); !strings.Contains(got.Text, "daemon.log_level info to debug") {
+		t.Errorf("feed = %q", got.Text)
+	}
+	if err := os.WriteFile(path, []byte("daemon:\n  log_level: loud\n"), 0o600); err == nil {
+		if s.ReloadConfig(context.Background()) == nil || s.Level.Level() != slog.LevelDebug {
+			t.Error("an unknown log level was applied")
+		}
 	}
 }

@@ -45,13 +45,16 @@ type Server struct {
 	Log        *slog.Logger
 	Fold       *fold.Fold
 	Runner     *dispatch.Runner
-	started    time.Time
-	stop       chan struct{}
-	stopOnce   sync.Once
-	sessMu     sync.Mutex
-	sessLocks  map[string]*sync.Mutex
-	live       atomic.Pointer[config.Config]
-	reloadMu   sync.Mutex
+	// Level is the level Log writes at, when it was opened with this one; a reload sets
+	// it from daemon.log_level.
+	Level     *slog.LevelVar
+	started   time.Time
+	stop      chan struct{}
+	stopOnce  sync.Once
+	sessMu    sync.Mutex
+	sessLocks map[string]*sync.Mutex
+	live      atomic.Pointer[config.Config]
+	reloadMu  sync.Mutex
 }
 
 // NewServer returns a Server with a fresh random token.
@@ -75,24 +78,27 @@ func newToken() (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
-// LogLevelEnv names the environment variable that sets the daemon's log level: debug,
-// info (the default), warn or error. It stands in for a daemon.log_level setting, which
-// needs a field in internal/config.
+// LogLevelEnv names the environment variable that overrides daemon.log_level: debug,
+// info, warn or error.
 const LogLevelEnv = "SHEPHERD_LOG_LEVEL"
 
-// logLevel reads LogLevelEnv; unset or unrecognised gives info.
-func logLevel() slog.Level {
+// LogLevel is the level the daemon logs at: LogLevelEnv's when it names one, else
+// configured (daemon.log_level), else info.
+func LogLevel(configured string) slog.Level {
 	var l slog.Level
-	if err := l.UnmarshalText([]byte(os.Getenv(LogLevelEnv))); err != nil {
-		return slog.LevelInfo
+	if err := l.UnmarshalText([]byte(os.Getenv(LogLevelEnv))); err == nil {
+		return l
 	}
-	return l
+	if err := l.UnmarshalText([]byte(configured)); err == nil {
+		return l
+	}
+	return slog.LevelInfo
 }
 
 // NewLogger returns a logger whose output is redacted before it is written, at the level
-// LogLevelEnv sets.
+// LogLevelEnv sets, else info.
 func NewLogger() *slog.Logger {
-	return newLogger(os.Stderr)
+	return newLogger(os.Stderr, LogLevel(""))
 }
 
 // Handler is the API, behind token authentication.

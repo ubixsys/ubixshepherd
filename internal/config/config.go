@@ -43,7 +43,12 @@ type Daemon struct {
 	Budget *float64 `yaml:"budget" json:"budget"`
 	// CreditUSD prices one Copilot credit, which Copilot reports instead of dollars.
 	CreditUSD *float64 `yaml:"credit_usd" json:"credit_usd"`
+	// LogLevel is what the daemon logs: debug, info, warn or error (one of LogLevels).
+	LogLevel string `yaml:"log_level" json:"log_level"`
 }
+
+// LogLevels are daemon.log_level's choices, quietest last.
+var LogLevels = []string{"debug", "info", "warn", "error"}
 
 // Branch models.
 const (
@@ -190,7 +195,7 @@ type Autonomy struct {
 func Default() Config {
 	yes := true
 	return Config{
-		Daemon: Daemon{Listen: "127.0.0.1:0", MaxRuns: 4, Poll: "60s", Budget: ptr(20.0), CreditUSD: ptr(0.04)},
+		Daemon: Daemon{Listen: "127.0.0.1:0", MaxRuns: 4, Poll: "60s", Budget: ptr(20.0), CreditUSD: ptr(0.04), LogLevel: "info"},
 		Defaults: Profile{
 			BaseBranch:  "main",
 			TagPrefix:   "v",
@@ -245,6 +250,9 @@ func Parse(b []byte) (Config, error) {
 	if file.Daemon.CreditUSD != nil {
 		c.Daemon.CreditUSD = file.Daemon.CreditUSD
 	}
+	if file.Daemon.LogLevel != "" {
+		c.Daemon.LogLevel = file.Daemon.LogLevel
+	}
 	c.Defaults = merge(c.Defaults, file.Defaults)
 	c.Repos = file.Repos
 	return c, c.Validate()
@@ -267,6 +275,9 @@ func (c Config) Validate() error {
 	}
 	if *c.Daemon.Budget < 0 || *c.Daemon.CreditUSD < 0 {
 		errs = append(errs, fmt.Errorf("daemon.budget and daemon.credit_usd cannot be negative"))
+	}
+	if !slices.Contains(LogLevels, c.Daemon.LogLevel) {
+		errs = append(errs, fmt.Errorf("daemon.log_level: %q is not %s", c.Daemon.LogLevel, strings.Join(LogLevels, ", ")))
 	}
 	if c.Daemon.MaxRuns < 1 {
 		errs = append(errs, fmt.Errorf("daemon.max_runs: %d; at least 1", c.Daemon.MaxRuns))

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -109,7 +110,9 @@ func daemonRun(ctx context.Context, env Env) error {
 	if term.IsTerminal(int(os.Stderr.Fd())) {
 		also = os.Stderr
 	}
-	logger, logFile, err := daemon.OpenLogger(l.Log(), also)
+	level := new(slog.LevelVar)
+	level.Set(daemon.LogLevel(cfg.Daemon.LogLevel))
+	logger, logFile, err := daemon.OpenLogger(l.Log(), also, level)
 	if err != nil {
 		return err
 	}
@@ -118,6 +121,7 @@ func daemonRun(ctx context.Context, env Env) error {
 	if err != nil {
 		return err
 	}
+	srv.Level = level
 	srv.Fold.Exe = env.Exe
 	srv.Runner = &dispatch.Runner{Store: st, Config: cfg, Dir: filepath.Join(l.Home, "runs"), Log: srv.Log, Exe: env.Exe}
 	if cfg.Daemon.Poll != "off" {

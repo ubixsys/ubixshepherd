@@ -18,6 +18,9 @@
 #   budget: 20
 #   ## What one Copilot credit costs, since Copilot reports credits, not dollars.
 #   credit_usd: 0.04
+#   ## What the daemon logs: debug, info, warn or error. A reload applies a change; the
+#   ## SHEPHERD_LOG_LEVEL environment variable, when set, overrides it.
+#   log_level: info
 
 ## The profile every repo starts from.
 # defaults:

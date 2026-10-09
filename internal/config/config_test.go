@@ -69,6 +69,8 @@ func TestParseRejects(t *testing.T) {
 		"bad push":          "repos:\n  x:\n    autonomy:\n      push: robot\n",
 		"shepherd no gate":  "repos:\n  x:\n    autonomy:\n      push: shepherd\n",
 		"bad permission":    "defaults:\n  agent:\n    permission_mode: yolo\n",
+		"bad log level":     "daemon:\n  log_level: loud\n",
+		"log level case":    "daemon:\n  log_level: DEBUG\n",
 	}
 	for name, in := range cases {
 		if _, err := Parse([]byte(in)); err == nil {
@@ -115,5 +117,17 @@ repos:
 func TestEmptyFileIsDefault(t *testing.T) {
 	if _, err := Parse(nil); err != nil {
 		t.Errorf("empty file: %v", err)
+	}
+}
+
+func TestLogLevel(t *testing.T) {
+	if Default().Daemon.LogLevel != "info" {
+		t.Errorf("default log level = %q", Default().Daemon.LogLevel)
+	}
+	for _, l := range LogLevels {
+		c, err := Parse([]byte("daemon:\n  log_level: " + l + "\n"))
+		if err != nil || c.Daemon.LogLevel != l {
+			t.Errorf("log_level %s: %q %v", l, c.Daemon.LogLevel, err)
+		}
 	}
 }

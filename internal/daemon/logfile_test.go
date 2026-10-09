@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"bytes"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -79,7 +80,7 @@ func TestRotatingFileBigRecord(t *testing.T) {
 func TestOpenLoggerRedactsAndTees(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "daemon.log")
 	var tee bytes.Buffer
-	log, closer, err := OpenLogger(path, &tee)
+	log, closer, err := OpenLogger(path, &tee, slog.LevelInfo)
 	if err != nil {
 		t.Fatal(err)
 	}

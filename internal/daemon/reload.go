@@ -33,7 +33,8 @@ func (s *Server) LiveConfig() config.Config {
 // refused: the daemon keeps the one it has and says why on the feed. A valid one is put
 // in force for whatever starts next (runs, gates, ships, lanes), and the feed says what
 // changed. A running agent keeps what it was started with: its brief and gate were
-// fixed when it started. The listen address and poll interval take a restart.
+// fixed when it started. The log level applies at once (unless SHEPHERD_LOG_LEVEL is
+// set, which overrides it). The listen address and poll interval take a restart.
 func (s *Server) ReloadConfig(ctx context.Context) error {
 	s.reloadMu.Lock()
 	defer s.reloadMu.Unlock()
@@ -61,6 +62,9 @@ func (s *Server) ReloadConfig(ctx context.Context) error {
 // one going.
 func (s *Server) applyConfig(cfg config.Config) {
 	s.live.Store(&cfg)
+	if s.Level != nil {
+		s.Level.Set(LogLevel(cfg.Daemon.LogLevel))
+	}
 	if s.Fold != nil {
 		s.Fold.SetConfig(cfg)
 	}
@@ -98,6 +102,9 @@ func configChanges(old, next config.Config) string {
 	}
 	if !reflect.DeepEqual(d.CreditUSD, n.CreditUSD) {
 		out = append(out, fmt.Sprintf("daemon.credit_usd %s to %s", amount(d.CreditUSD), amount(n.CreditUSD)))
+	}
+	if d.LogLevel != n.LogLevel {
+		out = append(out, fmt.Sprintf("daemon.log_level %s to %s", d.LogLevel, n.LogLevel))
 	}
 	if !reflect.DeepEqual(old.Defaults, next.Defaults) {
 		out = append(out, "defaults")
