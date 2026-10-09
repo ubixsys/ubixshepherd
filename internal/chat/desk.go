@@ -70,12 +70,14 @@ type ClaudeDesk struct {
 	Projects string
 }
 
-// Args builds one turn's command line.
-func (d ClaudeDesk) Args(session, message string, newSession bool) []string {
+// Args builds one turn's command line. The message is not on it: Turn writes it to
+// claude's standard input, where -p with no prompt argument reads it, so it cannot be
+// read with ps or matched by a pkill -f pattern.
+func (d ClaudeDesk) Args(session string, newSession bool) []string {
 	mcp, _ := json.Marshal(map[string]any{"mcpServers": map[string]any{
 		"shepherd": map[string]any{"command": d.Shepherd, "args": []string{"mcp"}},
 	}})
-	a := []string{"-p", message, "--output-format", "stream-json", "--verbose", "--include-partial-messages"}
+	a := []string{"-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages"}
 	if newSession {
 		a = append(a, "--session-id", session, "--append-system-prompt", DeskBrief)
 	} else {
@@ -114,9 +116,9 @@ func (d ClaudeDesk) Turn(ctx context.Context, session, message string, emit func
 			return "", err
 		}
 	}
-	cmd := exec.CommandContext(ctx, d.Bin, d.Args(session, message, newSession)...)
+	cmd := exec.CommandContext(ctx, d.Bin, d.Args(session, newSession)...)
 	cmd.Dir = d.Dir
-	cmd.Stdin = nil
+	cmd.Stdin = strings.NewReader(message)
 	cmd.Env = append(os.Environ(), "SHEPHERD_CLIENT=desk")
 	out, err := cmd.StdoutPipe()
 	if err != nil {

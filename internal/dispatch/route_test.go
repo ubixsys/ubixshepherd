@@ -70,14 +70,14 @@ func TestQuestionRoutedAndReplyReturned(t *testing.T) {
 	if target.LaneID != other.ID || target.Agent != "copilot" || target.Parent != prior.ID {
 		t.Errorf("question went to %+v, want copilot's session in lane api", target)
 	}
-	if a := argsOf(t, target); !strings.Contains(a, "What does GET /users return?") || !strings.Contains(a, "from claude in lane work") {
+	if a := stdinOf(t, target); !strings.Contains(a, "What does GET /users return?") || !strings.Contains(a, "from claude in lane work") {
 		t.Errorf("target prompt: %s", a)
 	}
 	back := f.wait(t, q.ReplyRun)
 	if back.Session != asker.Session || back.Parent != asker.ID {
 		t.Errorf("reply went to %+v, want the asker's session", back)
 	}
-	if a := argsOf(t, back); !strings.Contains(a, "Reply to your question") || !strings.Contains(a, "fake agent in") {
+	if a := stdinOf(t, back); !strings.Contains(a, "Reply to your question") || !strings.Contains(a, "fake agent in") {
 		t.Errorf("reply prompt: %s", a)
 	}
 	if q.Depth != 1 {
@@ -96,7 +96,7 @@ func TestReviewGoesToAnotherProvider(t *testing.T) {
 	if rev.Agent != "copilot" || rev.LaneID != f.lane.ID || rev.Parent != 0 {
 		t.Errorf("reviewer run = %+v, want a fresh copilot session in the author's lane", rev)
 	}
-	if a := argsOf(t, rev); !strings.Contains(a, "Do not change any files") {
+	if a := stdinOf(t, rev); !strings.Contains(a, "Do not change any files") {
 		t.Errorf("review prompt: %s", a)
 	}
 }

@@ -330,11 +330,12 @@ func (r *Runner) Start(ctx context.Context, req StartRequest) (store.Run, error)
 		prompt = Brief(req.Prompt, lane.Name, repo.Name, lane.Branch, lane.Base, lane.Worktree, lane.Scope, gate, may, worker != "", note)
 	}
 	agentPushes := may.Push == config.Agent
-	cmd := exec.Command(bin, ad.Args(Opts{Prompt: prompt, Model: req.Model, Gate: gate, Worktree: lane.Worktree,
+	cmd := exec.Command(bin, ad.Args(Opts{Model: req.Model, Gate: gate, Worktree: lane.Worktree,
 		Session: session, Resume: resume, Worker: worker,
 		Mode: prof.Agent.PermissionMode, Push: agentPushes, Merge: may.Merge})...)
 	cmd.Dir = lane.Worktree
-	cmd.Stdin = nil // reads from the null device: headless
+	// The prompt, then end of input: headless, and off the command line (see Adapter).
+	cmd.Stdin = strings.NewReader(prompt)
 	cmd.Env = append(os.Environ(),
 		"GIT_TERMINAL_PROMPT=0",
 		fmt.Sprintf("SHEPHERD_RUN=%d", run.ID), "SHEPHERD_LANE="+lane.Name,

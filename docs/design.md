@@ -114,6 +114,12 @@ done_when: merged      # opened | merged | deployed:<env>
 The same order goes to Claude, Gemini or a local model; each provider adapter turns it
 into that provider's prompt plus the rendered standards.
 
+The prompt never goes on an agent's command line. Anyone on the machine can read a
+process's arguments with `ps`, and a `pkill -f` pattern can match an agent through the
+words of its task and stop it. Shepherd writes the prompt to the agent's standard input
+instead: Claude Code, Copilot and Cursor each read it there when given no prompt argument.
+The same holds for the front desk's turns and for questions to an adopted conversation.
+
 ### 3.4 Typed reports and a closed task state machine
 
 Agents report through Shepherd's API (exposed to them as MCP tools), and each report is a

@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -46,13 +49,13 @@ not json
 
 func TestDeskArgs(t *testing.T) {
 	d := ClaudeDesk{Bin: "claude", Shepherd: "/bin/shepherd", Dir: "/w"}
-	first := strings.Join(d.Args("S", "hello", true), " ")
-	for _, want := range []string{"-p hello", "--session-id S", "--append-system-prompt", "--strict-mcp-config", `"args":["mcp"]`, "--allowedTools mcp__shepherd Read Grep Glob", "--disallowedTools Edit Write Bash"} {
+	first := strings.Join(d.Args("S", true), " ")
+	for _, want := range []string{"-p --output-format", "--session-id S", "--append-system-prompt", "--strict-mcp-config", `"args":["mcp"]`, "--allowedTools mcp__shepherd Read Grep Glob", "--disallowedTools Edit Write Bash"} {
 		if !strings.Contains(first, want) {
 			t.Errorf("first turn lacks %q", want)
 		}
 	}
-	next := strings.Join(d.Args("S", "again", false), " ")
+	next := strings.Join(d.Args("S", false), " ")
 	if !strings.Contains(next, "--resume S") || strings.Contains(next, "--append-system-prompt") {
 		t.Errorf("next turn: %s", next)
 	}
@@ -536,7 +539,7 @@ func TestModelCommand(t *testing.T) {
 		!has(m.Lines(), KindInfo, "The desk's model: opus (set with /model)") {
 		t.Errorf("/model opus: %q %+v", a.settings[settingModel], m.Lines())
 	}
-	if args := strings.Join(m.currentDesk().(ClaudeDesk).Args("S", "hi", false), " "); !strings.Contains(args, "--model opus") {
+	if args := strings.Join(m.currentDesk().(ClaudeDesk).Args("S", false), " "); !strings.Contains(args, "--model opus") {
 		t.Errorf("the turn does not use the model: %s", args)
 	}
 	typeLine(t, m, "/model reset")
@@ -551,5 +554,32 @@ func TestModelCommand(t *testing.T) {
 	typeLine(t, m, "/model a b")
 	if !has(m.Lines(), KindError, "usage: /model") {
 		t.Error("bad /model not refused")
+	}
+}
+
+// A desk turn sends the person's message on standard input, never on the command line.
+func TestDeskTurnSendsTheMessageOnStdin(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the fake claude is a shell script")
+	}
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "claude")
+	os.WriteFile(bin, []byte(`#!/bin/sh
+printf '%s ' "$@" > "$(dirname "$0")/args.txt"
+m=$(cat)
+printf '{"type":"assistant","message":{"content":[{"type":"text","text":"heard: %s"}]}}\n' "$m"
+echo '{"type":"result","subtype":"success","session_id":"s"}'
+`), 0o755)
+	d := ClaudeDesk{Bin: bin, Shepherd: "/bin/shepherd", Dir: dir}
+	var got []Line
+	if _, err := d.Turn(context.Background(), "", "open a lane for the zebra-quokka fix", func(l Line) { got = append(got, l) }); err != nil {
+		t.Fatal(err)
+	}
+	if !has(got, KindDesk, "heard: open a lane for the zebra-quokka fix") {
+		t.Errorf("reply: %+v", got)
+	}
+	args, _ := os.ReadFile(filepath.Join(dir, "args.txt"))
+	if strings.Contains(string(args), "zebra-quokka") || !strings.Contains(string(args), "--session-id") {
+		t.Errorf("command line: %s", args)
 	}
 }

@@ -1,6 +1,9 @@
 // Package dispatch starts agents in lanes and records what came of each run.
 //
-// An adapter turns a task into one agent CLI's headless command line. By default an
+// An adapter builds one agent CLI's headless command line. The task is never on it: the
+// runner writes the prompt to the agent's standard input, since anyone on the machine can
+// read a command line (ps), and a pkill -f or pgrep -f pattern could match an agent
+// through the words of its task. By default an
 // agent runs with the person's own powers (Claude Code's auto mode and their settings)
 // inside the lane's worktree, and never pushes. Where a CLI can deny `git push` itself,
 // the adapter says so; the runner also breaks pushing for every agent, so the rule
@@ -31,7 +34,8 @@ type Adapter struct {
 	Name string
 	// Bin is the executable looked up on PATH.
 	Bin string
-	// Args builds the headless command line for a run.
+	// Args builds the headless command line for a run, without the prompt: every CLI
+	// here reads it from standard input when it has no prompt argument.
 	Args func(o Opts) []string
 	// NewSession returns the id a new conversation will have, or "" when the CLI only
 	// reveals it in its output (see SessionIn).
@@ -121,9 +125,10 @@ func claudeLimit(line string) (Limit, bool) {
 	return l, ok
 }
 
-// Opts are what a run's command line is built from.
+// Opts are what a run's command line is built from. The prompt is not among them: it
+// goes on standard input.
 type Opts struct {
-	Prompt, Model, Gate, Worktree string
+	Model, Gate, Worktree string
 	// Session is the agent's conversation id; Resume says whether it already exists
 	// (continue it) or is new (start it under that id, where the CLI allows choosing).
 	Session string
@@ -177,11 +182,10 @@ var adapters = map[string]Adapter{
 	"claude": {
 		Name: "claude", Bin: "claude",
 		Args: func(o Opts) []string {
-			// The prompt comes right after -p: --allowedTools and --mcp-config take lists
-			// and would swallow a prompt placed after them.
+			// -p with no prompt argument reads the prompt from standard input.
 			// auto, the default, is the person's own auto mode and settings; the allowed
 			// list below is what acceptEdits and default need to do the work at all.
-			a := []string{"-p", o.Prompt, "--output-format", "stream-json", "--verbose", "--permission-mode", o.mode()}
+			a := []string{"-p", "--output-format", "stream-json", "--verbose", "--permission-mode", o.mode()}
 			if o.Resume {
 				a = append(a, "--resume", o.Session)
 			} else if o.Session != "" {
@@ -229,8 +233,9 @@ var adapters = map[string]Adapter{
 		Args: func(o Opts) []string {
 			// Copilot has no auto mode: auto and bypassPermissions allow every tool, the
 			// nearest to the person's own sessions headless; the other modes keep a list.
-			// A deny wins over any allow.
-			a := []string{"-p", o.Prompt}
+			// A deny wins over any allow. No -p: it requires the prompt as its value, and
+			// Copilot given a piped prompt instead runs it headless and exits.
+			var a []string
 			if o.allowsAll() {
 				a = append(a, "--allow-all-tools")
 			} else {
@@ -282,7 +287,8 @@ var adapters = map[string]Adapter{
 			// line: --force lets it run commands in every mode, and the runner's push
 			// block holds the line where agents may not push. Its chat is created first
 			// (NewSession), so every run resumes one.
-			a := []string{"-p", o.Prompt, "--output-format", "text", "--force", "--trust", "--workspace", o.Worktree}
+			// -p is --print, a switch; with no prompt argument it reads standard input.
+			a := []string{"-p", "--output-format", "text", "--force", "--trust", "--workspace", o.Worktree}
 			if o.Session != "" {
 				a = append(a, "--resume", o.Session)
 			}
