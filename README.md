@@ -134,6 +134,18 @@ sessions.
 | `/model` | show the desk's model and where it came from; `/model opus` sets it, `/model reset` goes back to `config.yaml` |
 | `/new` | start a new conversation with the desk |
 
+**The desk in the daemon.** The daemon also runs a front desk of its own, one
+conversation per workspace kept in its store, for clients that follow one shared
+conversation instead of starting their own: the browser UI, and the terminal once
+`shepherd chat` moves onto it (today the chat still runs its own desk). A client posts the
+person's messages to `POST /v1/desk/turn` and follows `GET /v1/desk/stream`, server-sent
+events that resume from a sequence number; `internal/api/desk.go` documents the API.
+Swarm events (a run ended, a decision waits, a request needs routing) wake this desk on
+its own as `desk.wake` says: `attached`, the default, only while a client follows it, and
+otherwise as one digest when the next one attaches; `always`; or `never`. A turn the desk
+takes on its own cannot answer a decision, only one the person started. Each turn's cost
+is recorded as `desk` spend.
+
 ### Moving a repo onto Shepherd
 
 A repo already coordinated by hand, with a lane table in a file like `AGENTS-COORD.md`
@@ -437,7 +449,7 @@ repos:
 
 Other settings worth knowing: `daemon.log_level` (`debug`, `info`, `warn` or `error`,
 applied on reload), `desk.model` (the front desk's model, overridden by `shepherd chat
---model` or `/model`), and `agent.model` per repo (a model per agent, used when `lane run`
+--model` or `/model`), `desk.wake` (when the daemon's desk wakes on its own), and `agent.model` per repo (a model per agent, used when `lane run`
 names none).
 
 ## Branches and releases

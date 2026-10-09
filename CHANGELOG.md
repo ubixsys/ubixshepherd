@@ -18,6 +18,15 @@ protocol) is listed under **Interface changes** in the release that makes it.
   its own lane's tags, read its own run and run the pre-push check. A desk role, for a
   front desk the daemon runs, gets the operator tools but may answer a decision only in
   a turn the person started. See `docs/design.md` §3.17.
+- **The front desk in the daemon.** The daemon runs a front desk of its own, one
+  conversation per workspace kept in the store, that clients follow instead of starting
+  their own: `POST /v1/desk/turn`, `GET /v1/desk/stream` (server-sent events, resumable
+  by sequence number), `GET /v1/desk/history`, `GET /v1/desk/status`,
+  `POST /v1/desk/interrupt` and `POST /v1/desk/new`. Swarm events wake it on its own
+  as the new `desk.wake` setting says (`attached`, the default, `always` or `never`),
+  as one digest when nobody was attached. A turn it takes on its own cannot answer a
+  decision. Each turn's own cost is recorded as `desk` spend. `shepherd chat` keeps its
+  own desk for now. See `docs/design.md` §3.18.
 
 ### Interface changes
 

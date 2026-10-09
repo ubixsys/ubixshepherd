@@ -499,8 +499,8 @@ own CLI, resuming its session, until the human exits back. Shepherd keeps the re
 way. Stopping a run or closing a lane asks for confirmation; reading never does.
 
 **Who the human talks to.** The human is the master coordinator; the **front desk** is
-their voice: an ordinary agent session hosted in the terminal and wired to Shepherd's
-operator tools, with read-only access to the workspace. It drafts work orders and
+their voice: an ordinary agent session, hosted by the daemon (§3.18; the terminal
+chat still hosts its own until it moves onto that one), and wired to Shepherd's operator tools, with read-only access to the workspace. It drafts work orders and
 summarises. Shepherd does not run its own model for the conversation or for the dock: the
 control plane and everything it displays stay deterministic code ("the shepherd is not a
 sheep"), and the front desk can be swapped without changing anything else.
@@ -558,6 +558,36 @@ event cannot answer for the person. They are not isolation. An agent runs as the
 user as the daemon, so it can read `daemon.json` and use the operator token. Real
 isolation needs agents under a separate account or an OS sandbox; that is planned for
 later.
+
+### 3.18 The front desk in the daemon
+
+**Status: built (2026-10-09); the terminal chat moves onto it next.**
+
+The maintainer decided that the desk lives in the daemon, and that the terminal and the
+browser are thin clients of one shared conversation. Before, `shepherd chat` started the
+desk itself: one conversation per open terminal, and none at all when no terminal was
+open, so the swarm's events waited for the person to come back.
+
+- **One conversation per workspace**, run by the daemon one turn at a time, with a
+  bounded queue. A turn is a headless Claude Code session resumed with the person's
+  message, or with what Shepherd has to tell it, as §3.16's desk is, with the same
+  read-only tools and operator tools. It keeps its own session, never the chat's: two
+  processes must not resume one session.
+- **Kept in the store.** Every event of the conversation (the person's message, a
+  wake-up, the reply, a tool call, the cost, an error, a turn's start and end) has a
+  sequence number, the turn it belongs to and that turn's origin, human or system. Clients
+  follow it as server-sent events and resume from a sequence number after a dropped
+  connection or a daemon restart; a restart closes the turn it cut short. Partial replies
+  stream live and are not stored. Old events are trimmed past a cap.
+- **Wake-ups move into the daemon.** The kinds that continued the chat's desk on their own
+  (a run ended, an agent out of quota, a request needing routing) and a decision waiting
+  now continue the daemon's desk, as `desk.wake` allows: while a client is attached and
+  briefly after (`attached`, the default), `always`, or `never`. Events that arrive with
+  nobody attached wait as one digest, newest first past a bound, for the next client.
+- **A wake-up cannot answer for the person.** Each turn gets a desk token (§3.17) that may
+  answer a decision only when the person started the turn.
+- **Cost per turn.** Claude Code reports a session's total, so a turn records the
+  difference from the last total, as spend from `desk`.
 
 ## 4. Where the efficiency comes from
 
