@@ -1,8 +1,15 @@
 package cli
 
 import (
+	"bytes"
+	"context"
+	"io"
+	"os"
 	"reflect"
+	"strings"
 	"testing"
+
+	"github.com/ubixsys/ubixshepherd/internal/paths"
 )
 
 func TestScrubRunEnv(t *testing.T) {
@@ -44,3 +51,51 @@ func TestScrubRunEnv(t *testing.T) {
 		})
 	}
 }
+
+func TestDaemonCommandsRefuseFromRun(t *testing.T) {
+	t.Setenv("SHEPHERD_RUN", "7")
+	for _, sub := range []string{"start", "restart", "install"} {
+		l := paths.Layout{Home: t.TempDir()}
+		errOut := &bytes.Buffer{}
+		env := Env{Stdout: io.Discard, Stderr: errOut, Layout: l, Cwd: l.Home}
+		if code := Run(context.Background(), env, []string{"daemon", sub}); code != 1 {
+			t.Errorf("daemon %s: exit %d, want 1", sub, code)
+		}
+		for _, want := range []string{"agent run", "--force-from-run", "stops that agent's own run"} {
+			if !strings.Contains(errOut.String(), want) {
+				t.Errorf("daemon %s: %q is missing %q", sub, errOut, want)
+			}
+		}
+		if _, err := os.Stat(l.Console()); err == nil {
+			t.Errorf("daemon %s: started a daemon anyway", sub)
+		}
+	}
+}
+
+func TestForceFromRunWarnsAndProceeds(t *testing.T) {
+	t.Setenv("SHEPHERD_RUN", "7")
+	l := paths.Layout{Home: t.TempDir()}
+	if err := os.WriteFile(l.Config(), []byte(badConfig), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	errOut := &bytes.Buffer{}
+	env := Env{Stdout: io.Discard, Stderr: errOut, Layout: l, Cwd: l.Home}
+	if code := Run(context.Background(), env, []string{"daemon", "start", "--force-from-run"}); code != 1 {
+		t.Fatalf("exit %d", code)
+	}
+	// Past the guard, the start reaches the config check.
+	if !strings.Contains(errOut.String(), "warning:") || !strings.Contains(errOut.String(), "is not human or agent") {
+		t.Errorf("want a warning, then the start to proceed: %q", errOut)
+	}
+}
+
+func TestNoGuardOutsideRun(t *testing.T) {
+	t.Setenv("SHEPHERD_RUN", "")
+	if err := refuseFromRun(Env{Stderr: io.Discard}, "start", false); err != nil {
+		t.Errorf("refused outside a run: %v", err)
+	}
+}
+
+// The suite may itself run inside an agent run, whose SHEPHERD_RUN would trip the
+// guard in every daemon test; tests that want it set it with t.Setenv.
+func init() { os.Unsetenv("SHEPHERD_RUN") }

@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -75,4 +77,19 @@ func unsetRunEnv() {
 	for k := range runEnvDrops(os.Environ()) {
 		os.Unsetenv(k)
 	}
+}
+
+// refuseFromRun stops `daemon start`, `restart` and `install` run from inside an agent
+// run (SHEPHERD_RUN is set) unless force is given: the daemon would be restarted by one
+// of its own agents, and stopping it ends that agent's run.
+func refuseFromRun(env Env, sub string, force bool) error {
+	if os.Getenv("SHEPHERD_RUN") == "" {
+		return nil
+	}
+	fmt.Fprintf(env.Stderr, "warning: `shepherd daemon %s` is being run from inside an agent run (SHEPHERD_RUN is set).\n"+
+		"The daemon will be restarted by an agent, and stopping the old daemon stops that agent's own run.\n", sub)
+	if force {
+		return nil
+	}
+	return errors.New("refusing; ask the person to run it, or pass --force-from-run")
 }

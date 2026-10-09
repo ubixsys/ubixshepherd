@@ -32,6 +32,7 @@ var serviceFor = service.For
 
 func runDaemon(ctx context.Context, env Env, args []string) error {
 	fs := flags("daemon", env)
+	force := fs.Bool("force-from-run", false, "allow start, restart or install from inside an agent run")
 	pos, err := parse(fs, args)
 	if err != nil {
 		return err
@@ -43,6 +44,11 @@ func runDaemon(ctx context.Context, env Env, args []string) error {
 		sub = pos[0]
 	default:
 		return errUsage
+	}
+	if sub == "start" || sub == "restart" || sub == "install" {
+		if err := refuseFromRun(env, sub, *force); err != nil {
+			return err
+		}
 	}
 	switch sub {
 	case "run":
