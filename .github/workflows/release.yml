@@ -1,0 +1,92 @@
+name: Release
+
+# Publish a GitHub Release for a version tag. Tags are cut on the internal forge, which
+# push-mirrors them here. A mirrored tag does not always fire the tag push event, so the
+# workflow can also be run by hand against the tag:
+#   gh workflow run Release --ref v0.1.0-beta.1
+# See docs/RELEASING.md.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build, check & sign
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # keyless cosign signing of SHA256SUMS via GitHub OIDC
+    env:
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
+      - name: Release notes from CHANGELOG.md
+        run: make --no-print-directory release-notes VERSION="$TAG" > release-notes.md
+
+      - name: Build the archives and SHA256SUMS
+        run: make dist VERSION="$TAG"
+
+      - name: The binary reports the tag
+        run: |
+          got="$(SHEPHERD_NO_AUTOSTART=1 SHEPHERD_HOME="$RUNNER_TEMP/shepherd" dist/shepherd-linux-amd64 version)"
+          if [ "$got" != "shepherd $TAG" ]; then
+            echo "tag $TAG, but the binary reports: $got"
+            exit 1
+          fi
+          echo "$got"
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      # The bundle carries the signature and the short-lived certificate that binds it to
+      # this workflow at this tag; verify with cosign verify-blob (docs/RELEASING.md).
+      - name: Sign SHA256SUMS (keyless)
+        run: cosign sign-blob --yes --bundle dist/SHA256SUMS.sigstore.json dist/SHA256SUMS
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release
+          path: |
+            release-notes.md
+            dist/*.tar.gz
+            dist/*.zip
+            dist/SHA256SUMS
+            dist/SHA256SUMS.sigstore.json
+          if-no-files-found: error
+
+  publish:
+    name: Publish the GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the release and upload its assets
+    env:
+      TAG: ${{ github.ref_name }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release
+
+      - name: Create the release
+        run: |
+          pre=
+          case "$TAG" in *-*) pre=--prerelease ;; esac
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag $pre \
+            --title "$TAG" --notes-file release-notes.md \
+            dist/*.tar.gz dist/*.zip dist/SHA256SUMS dist/SHA256SUMS.sigstore.json
