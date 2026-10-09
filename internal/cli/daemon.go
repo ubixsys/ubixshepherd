@@ -216,7 +216,7 @@ func spawn(env Env) (int, error) {
 	defer logf.Close()
 	cmd := exec.Command(env.Exe, "daemon")
 	cmd.Stdout, cmd.Stderr = logf, logf
-	cmd.Env = append(os.Environ(), paths.HomeEnv+"="+env.Layout.Home)
+	cmd.Env = append(scrubRunEnv(os.Environ()), paths.HomeEnv+"="+env.Layout.Home)
 	cmd.SysProcAttr = detached()
 	if err := cmd.Start(); err != nil {
 		return 0, err
