@@ -179,6 +179,9 @@ func (m *Manager) Done() <-chan struct{} { return m.ctx.Done() }
 type Desk struct {
 	m  *Manager
 	ws store.Workspace
+	// carry is the message of a turn a daemon stop cut short, for the next turn: the
+	// agent may never have saved it to its session.
+	carry string
 
 	mu    sync.Mutex
 	queue []turn
@@ -275,6 +278,7 @@ func (d *Desk) New(ctx context.Context) error {
 	}
 	d.queue = nil
 	d.pending, d.dropped = nil, 0
+	d.carry = ""
 	d.gen++
 	if err := d.m.o.Store.SetSetting(ctx, settingSession(d.ws.ID), ""); err != nil {
 		return err
@@ -475,7 +479,14 @@ func (d *Desk) run(t turn) {
 		add(l.Kind, redact.String(l.Text))
 	}
 	model := o.Model(bg)
-	err = o.Agent.Turn(ctx, Spec{Session: session, New: fresh, Message: t.text, Dir: d.ws.Path, Model: model,
+	message := t.text
+	d.mu.Lock()
+	if d.carry != "" && !fresh {
+		message = d.carry + message
+	}
+	d.carry = ""
+	d.mu.Unlock()
+	err = o.Agent.Turn(ctx, Spec{Session: session, New: fresh, Message: message, Dir: d.ws.Path, Model: model,
 		Env: []string{dispatch.EnvToken + "=" + tok, dispatch.EnvURL + "=" + o.Tokens.URL()}}, emit)
 	if rest := strings.TrimSpace(partial.String()); rest != "" {
 		// The stream ended without the whole reply: keep what came.
@@ -495,7 +506,7 @@ func (d *Desk) run(t turn) {
 	case interrupted:
 		end("interrupted")
 	case d.m.ctx.Err() != nil:
-		end("interrupted: the daemon stopped")
+		end(stoppedEnd)
 	case err != nil:
 		add(store.DeskError, "the desk: "+redact.String(err.Error()))
 		end("failed")
@@ -568,28 +579,49 @@ func (d *Desk) live(e store.DeskEvent) {
 	}
 }
 
-// recover closes the turns a stopped daemon left open, so a client never waits on one.
+// stoppedEnd ends a turn the daemon's stop cut short.
+const stoppedEnd = "interrupted: the daemon stopped"
+
+// recover closes the turns a stopped daemon left open, so a client never waits on one,
+// and keeps the message of the last one for the next turn.
 func (d *Desk) recover(ctx context.Context) error {
 	recent, err := d.m.o.Store.DeskHistory(ctx, d.ws.ID, 0, 200)
 	if err != nil {
 		return err
 	}
-	open := map[int64]string{}
-	var order []int64
+	type opening struct{ text, origin, end string }
+	turns := map[int64]*opening{}
+	var all, order []int64
 	for _, e := range recent {
 		switch e.Kind {
 		case store.DeskUser, store.DeskSystem:
-			open[e.Turn] = e.Origin
-			order = append(order, e.Turn)
+			turns[e.Turn] = &opening{text: e.Text, origin: e.Origin}
+			all, order = append(all, e.Turn), append(order, e.Turn)
 		case store.DeskTurnEnd:
-			delete(open, e.Turn)
+			if t := turns[e.Turn]; t != nil {
+				t.end = e.Text
+			}
+		case store.DeskNew:
+			order = nil // what came before belongs to another session
 		}
 	}
-	for _, id := range order {
-		if origin, ok := open[id]; ok {
-			if _, err := d.append(ctx, store.DeskEvent{Kind: store.DeskTurnEnd, Turn: id, Origin: origin, Text: "interrupted: the daemon stopped"}); err != nil {
+	for _, id := range all {
+		if t := turns[id]; t.end == "" {
+			if _, err := d.append(ctx, store.DeskEvent{Kind: store.DeskTurnEnd, Turn: id, Origin: t.origin, Text: stoppedEnd}); err != nil {
 				return err
 			}
+			t.end = stoppedEnd
+		}
+	}
+	// The last turn, cut short by the stop: the agent was killed and may never have
+	// recorded the message in its session, so the next turn brings it along.
+	if n := len(order); n > 0 {
+		if t := turns[order[n-1]]; t.end == stoppedEnd {
+			who := "the person"
+			if t.origin == store.DeskBySystem {
+				who = "Shepherd"
+			}
+			d.carry = fmt.Sprintf("[Shepherd] The daemon restarted during your previous turn, so you may not have seen this message from %s, or not finished answering it:\n%s\n\nThe new message follows. Take both into account.\n\n", who, t.text)
 		}
 	}
 	return nil

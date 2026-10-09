@@ -36,7 +36,7 @@ n=$((n+1))
 echo $n > "$FAKE_DIR/$session.n"
 case $n in 1) c=0.10 ;; 2) c=0.25 ;; *) c=0.45 ;; esac
 echo '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"Hel"}}}'
-case "$msg" in *"please sleep"*) sleep 30 ;; esac
+case "$msg" in "please sleep"*) sleep 30 ;; esac
 case "$msg" in *"please fail"*) echo "the model is gone" >&2; exit 1 ;; esac
 echo '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"lo"}}}'
 echo '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"mcp__shepherd__lane_list","input":{"repo":"app"}}]}}'
@@ -320,8 +320,22 @@ func TestRestartResumes(t *testing.T) {
 	d2.Send(context.Background(), "three")
 	r.waitEnded(t, 3)
 	log := r.claudeLog(t)
-	if !strings.Contains(log[strings.LastIndex(log, "ARGS"):], "--resume "+session) {
+	last := log[strings.LastIndex(log, "ARGS"):]
+	if !strings.Contains(last, "--resume "+session) {
 		t.Errorf("did not resume %s after the restart:\n%s", session, log)
+	}
+	// The message the stop cut short comes along with the next one: the agent was
+	// killed, and may never have saved it to its session.
+	if !strings.Contains(last, "MSG [Shepherd] The daemon restarted during your previous turn") ||
+		!strings.Contains(last, "from the person, or not finished answering it: please sleep") || !strings.Contains(last, "three") {
+		t.Errorf("the cut-short message was not carried:\n%s", last)
+	}
+	// Only once.
+	d2.Send(context.Background(), "four")
+	r.waitEnded(t, 4)
+	log = r.claudeLog(t)
+	if last := log[strings.LastIndex(log, "ARGS"):]; strings.Contains(last, "restarted") {
+		t.Errorf("carried twice:\n%s", last)
 	}
 }
 
