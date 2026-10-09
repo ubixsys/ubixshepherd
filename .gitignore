@@ -1,2 +1,3 @@
-bin/
+# Build output: `make build` writes bin/shepherd. The scripts in bin/ are tracked sources.
+/bin/shepherd
 dist/
