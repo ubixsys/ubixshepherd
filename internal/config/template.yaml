@@ -27,6 +27,10 @@
 #   ## Its model, unless the chat is started with --model or one was set with /model
 #   ## in the chat; empty leaves it to Claude Code's default.
 #   model: ""
+#   ## When the daemon's front desk takes a turn on its own for the swarm's events:
+#   ## attached (only while a client follows it, then one digest when one comes back),
+#   ## always, or never.
+#   wake: attached
 
 ## The profile every repo starts from.
 # defaults:

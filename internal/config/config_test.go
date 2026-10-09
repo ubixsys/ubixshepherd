@@ -154,3 +154,17 @@ func TestModels(t *testing.T) {
 		t.Error("a repo's models changed the defaults'")
 	}
 }
+
+func TestDeskWake(t *testing.T) {
+	if m := Default().Desk.WakeMode(); m != WakeAttached {
+		t.Errorf("default wake = %q", m)
+	}
+	for _, w := range WakeModes {
+		if _, err := Parse([]byte("desk:\n  wake: " + w + "\n")); err != nil {
+			t.Errorf("wake %s: %v", w, err)
+		}
+	}
+	if _, err := Parse([]byte("desk:\n  wake: sometimes\n")); err == nil || !strings.Contains(err.Error(), "desk.wake") {
+		t.Errorf("bad wake: %v", err)
+	}
+}
