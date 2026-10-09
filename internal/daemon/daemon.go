@@ -559,7 +559,7 @@ func (s *Server) prePush(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
-	v, err := s.Fold.CheckPush(r.Context(), res.Lane, res.Repo, req.Path, req.Refs)
+	v, err := s.Fold.CheckPushTo(r.Context(), res.Lane, res.Repo, req.Path, req.Remote, req.Refs)
 	if err != nil {
 		s.fail(w, err)
 		return

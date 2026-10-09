@@ -199,6 +199,13 @@ The boundaries still hold whichever is set: the pre-push hook checks the branch 
 and the forge's approvals, pipelines and threads decide whether a merge happens. No
 setting lets an agent approve.
 
+Under `autonomy.push: agent` the hook also tells the daemon which remote git is pushing
+to, and a running agent's push goes ahead only to the lane repo's origin, by name or by
+its URL. A push to any other remote is refused, and so is one from a hook that names no
+remote (an older hook), since the daemon cannot tell where it goes. The hook is the only
+check here: the run is not push-blocked, so it holds for an agent that cooperates, not
+one that passes `--no-verify` or rewrites its origin.
+
 ### 3.8 Playbooks: "missed once already" becomes "cannot be missed"
 
 A playbook is an event plus a condition that produces work orders, like a CI rule:

@@ -315,8 +315,12 @@ type CloseLane struct {
 // PrePush is the body of POST /v1/hook/pre-push.
 type PrePush struct {
 	// Path is the worktree git ran the hook in.
-	Path string         `json:"path"`
-	Refs []fold.PushRef `json:"refs"`
+	Path string `json:"path"`
+	// Remote is the hook's first argument: the remote's name, or its URL when the push
+	// names none. An older hook leaves it out, and a push from a running agent's lane is
+	// then refused.
+	Remote string         `json:"remote,omitempty"`
+	Refs   []fold.PushRef `json:"refs"`
 }
 
 // RepoHook is the body of POST /v1/repos/{id}/hook: install, uninstall or status.
