@@ -1,12 +1,32 @@
-# The default stages plus promote, which runs last. The existing jobs stay in the default
-# test stage.
-stages: [build, test, deploy, promote]
+# The default stages plus approval and promote. The checks stay in the default test stage.
+# approval only runs in merge request pipelines and promote only in dev push pipelines, so
+# the two never meet; both come after the checks so a red sign-off never hides them.
+stages: [build, test, deploy, approval, promote]
+
+# One pipeline per push. A merge request gets a merge request pipeline, the one that
+# "Pipelines must succeed" judges, so the approval job has to be in it; the push to its
+# branch then starts no branch pipeline of its own. dev and main always get their push
+# pipelines (promote-to-main runs there), and so does a branch with no open MR, a tag, or
+# anything else that ran before.
+workflow:
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS && $CI_COMMIT_BRANCH != "dev" && $CI_COMMIT_BRANCH != "main"'
+      when: never
+    - when: always
+
+# The checks run in every pipeline the workflow lets through, merge request pipelines
+# included (a job without rules would skip those).
+.every_pipeline:
+  rules:
+    - when: on_success
 
 # The repo is public and mirrored, so nothing private may be committed. The pattern of
 # private names lives in the PUBLIC_BOUNDARY_PATTERN CI variable (project settings, not the
 # repo, so the list itself is not published). The job prints file and line only, never the
 # matched text, so the job log does not publish it either.
 public-boundary:
+  extends: .every_pipeline
   tags: [shell]            # the instance runner is a shell executor that takes tagged jobs only
   script:
     - |
@@ -26,6 +46,7 @@ public-boundary:
 # runner's uid so nothing root-owned lands in the checkout. The build and module caches
 # live under the runner's home, so later pipelines reuse them.
 .go:
+  extends: .every_pipeline
   tags: [shell]
   variables:
     GO_IMAGE: golang:1.26
@@ -70,3 +91,24 @@ promote-to-main:
     - if: '$CI_COMMIT_BRANCH == "dev" && $CI_PIPELINE_SOURCE == "push"'
   script:
     - bash bin/promote.sh
+
+# Every merge needs a human sign-off: an Approve or a thumbs-up on the MR
+# (bin/ci/require-approval.sh). Agents may arm merge-when-pipeline-succeeds on their own
+# lane, and dev is promoted to main and mirrored in public, so with "Pipelines must
+# succeed" on, this job failing is what keeps a merge waiting for a person. Agents never
+# approve and never give the thumbs-up. GitLab does not re-run a pipeline on approval:
+# approve, then retry this job.
+# Every MR here is opened under the maintainer's account, so a username listed in
+# MERGE_APPROVAL_OWNERS may sign off on their own MR, and the job log records it. With the
+# variable unset, only a sign-off from someone other than the author counts.
+# APPROVAL_CHECK_TOKEN: project access token, Reporter role, read_api scope. Masked but
+# NOT protected: MR branches are unprotected, so a protected variable would never reach
+# this job, and without it the job fails.
+require-approval:
+  stage: approval
+  tags: [shell]
+  timeout: 5 minutes
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+  script:
+    - bash bin/ci/require-approval.sh
