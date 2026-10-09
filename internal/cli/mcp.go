@@ -439,6 +439,7 @@ func workerTools() []mcpTool {
 func runMCP(ctx context.Context, env Env, args []string) error {
 	fs := flags("mcp", env)
 	worker := fs.Bool("worker", false, "serve the worker tools, for an agent Shepherd started")
+	scoped := fs.Bool("scoped", false, "refuse to start without SHEPHERD_TOKEN (for the daemon's front desk)")
 	if pos, err := parse(fs, args); err != nil {
 		return err
 	} else if len(pos) > 0 {
@@ -446,6 +447,9 @@ func runMCP(ctx context.Context, env Env, args []string) error {
 	}
 	// Started by Shepherd (an agent's worker tools, or the daemon's front desk): call
 	// the daemon with the token it was given, never daemon.json's operator token.
+	if *scoped && os.Getenv(dispatch.EnvToken) == "" {
+		return fmt.Errorf("--scoped needs %s: this server is for the daemon's front desk, and will not fall back to daemon.json", dispatch.EnvToken)
+	}
 	if os.Getenv(dispatch.EnvToken) != "" {
 		scoped, done, err := scopedEnv(env)
 		if err != nil {
