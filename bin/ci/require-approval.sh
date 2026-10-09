@@ -9,7 +9,8 @@
 # Agents never approve, and never give the thumbs-up: a sign-off is a person's.
 #
 # Who counts:
-#   - MERGE_APPROVAL_OWNERS set (comma-separated usernames): only a sign-off by one of
+#   - MERGE_APPROVAL_OWNERS set (usernames separated by commas, spaces or newlines; case,
+#     quotes and a leading @ are ignored): only a sign-off by one of
 #     them counts, including on an MR they opened themselves (logged as a self sign-off).
 #   - MERGE_APPROVAL_OWNERS unset: a sign-off by anyone other than the MR's author.
 #
@@ -119,15 +120,23 @@ for n in out:
 
 # Only plausible usernames reach the log or the comparisons.
 clean() { grep -E '^[A-Za-z0-9_.-]+$' || true; }
+# GitLab usernames are case-insensitive: compare, and log, them lowercased.
+lower() { tr 'A-Z' 'a-z'; }
+# Owner entries: commas, spaces, tabs, newlines and carriage returns all separate; each
+# entry loses surrounding quotes and a leading @. Prints the non-empty entries, lowercased.
+owner_entries() {
+    printf '%s\n' "${MERGE_APPROVAL_OWNERS:-}" | tr '\r,\t ' '\n\n\n\n' |
+        sed -E "s/^[\"']+//; s/[\"']+\$//; s/^@+//" | lower | grep -v '^$' || true
+}
 
 get "$BASE" "$TMP/mr.json"
 AUTHOR=$(usernames author "$TMP/mr.json") || fail "the merge request reply is not the expected JSON."
-AUTHOR=$(printf '%s\n' "$AUTHOR" | clean | head -n 1)
+AUTHOR=$(printf '%s\n' "$AUTHOR" | clean | lower | head -n 1)
 [ -n "$AUTHOR" ] || fail "the merge request reply names no author."
 
 get "$BASE/approvals" "$TMP/approvals.json"
 APPROVERS=$(usernames approvers "$TMP/approvals.json") || fail "the approvals reply is not the expected JSON."
-APPROVERS=$(printf '%s\n' "$APPROVERS" | clean)
+APPROVERS=$(printf '%s\n' "$APPROVERS" | clean | lower)
 
 # Award emoji are paginated; follow GitLab's next-page header, within a sane bound.
 THUMBS=
@@ -136,13 +145,13 @@ while [ -n "$page" ]; do
     [ "$page" -le 50 ] || fail "too many pages of award emoji to read."
     get "$BASE/award_emoji?per_page=100&page=${page}" "$TMP/awards.json"
     more=$(usernames thumbsup "$TMP/awards.json") || fail "the award emoji reply is not the expected JSON."
-    THUMBS=$(printf '%s\n%s\n' "$THUMBS" "$more" | clean)
+    THUMBS=$(printf '%s\n%s\n' "$THUMBS" "$more" | clean | lower)
     page=$(tr -d '\r' <"$TMP/headers" | awk -F': *' 'tolower($1) == "x-next-page" { print $2 }' | grep -E '^[0-9]+$' || true)
 done
 
 SIGNERS=$(printf '%s\n%s\n' "$APPROVERS" "$THUMBS" | clean | sort -u)
 
-OWNERS=$(printf '%s\n' "${MERGE_APPROVAL_OWNERS:-}" | tr ',' '\n' | tr -d ' \t' | clean | sort -u)
+OWNERS=$(owner_entries | clean | sort -u)
 if [ -n "$OWNERS" ]; then
     COUNTED=$(printf '%s\n' "$SIGNERS" | grep -Fxf <(printf '%s\n' "$OWNERS") || true)
     rule="a sign-off from one of MERGE_APPROVAL_OWNERS"
