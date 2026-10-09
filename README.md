@@ -419,3 +419,7 @@ More versions (one-liner, technical) are in [docs/pitch.md](docs/pitch.md).
 | [docs/pitch.md](docs/pitch.md) | Elevator pitches, ready to paste |
 | [docs/open-questions.md](docs/open-questions.md) | Decisions not yet made |
 | [CLAUDE.md](CLAUDE.md) | Hand-off notes for an AI session picking this up |
+
+## Licence
+
+BSD 3-Clause. See [LICENSE](LICENSE).
