@@ -154,8 +154,8 @@ func (r *Runner) outOfQuota(agent string, run int64, l Limit) time.Time {
 // a ship, a gate) reads the configuration once, so a reload never splits one.
 func (r *Runner) SetConfig(c config.Config) { r.cfg.Store(&c) }
 
-// conf is the configuration for one operation: the last SetConfig's, else Config.
-func (r *Runner) conf() config.Config {
+// Conf is the configuration for one operation: the last SetConfig's, else Config.
+func (r *Runner) Conf() config.Config {
 	if c := r.cfg.Load(); c != nil {
 		return *c
 	}
@@ -187,7 +187,7 @@ func (r *Runner) Recover(ctx context.Context) error {
 // Start starts an agent in a lane and returns at once; the run is watched in the
 // background and recorded when it exits.
 func (r *Runner) Start(ctx context.Context, req StartRequest) (store.Run, error) {
-	cfg := r.conf()
+	cfg := r.Conf()
 	var parent store.Run
 	if req.Continue != 0 {
 		p, err := r.Store.Run(ctx, req.Continue)

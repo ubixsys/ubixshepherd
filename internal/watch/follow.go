@@ -38,7 +38,7 @@ func (w *Watcher) checkFollows(ctx context.Context, repos []store.Repo) {
 	}
 	latest := map[int64]string{} // upstream repo → its highest release tag, this check
 	for _, repo := range repos {
-		for _, f := range w.Fold.Config.Profile(repo.Name).Follows {
+		for _, f := range w.Fold.Conf().Profile(repo.Name).Follows {
 			f = f.Effective()
 			up, ok := byName[f.Repo]
 			if !ok {
@@ -80,7 +80,7 @@ func (w *Watcher) highestRelease(ctx context.Context, repo store.Repo) (string, 
 	if err != nil {
 		return "", err
 	}
-	prefix := w.Fold.Config.Profile(repo.Name).TagPrefix
+	prefix := w.Fold.Conf().Profile(repo.Name).TagPrefix
 	best, bestV := "", fold.Version{}
 	for _, t := range tags {
 		if v, ok := fold.ParseTag(prefix, t); ok && (best == "" || bestV.Less(v)) {
@@ -96,7 +96,7 @@ func (w *Watcher) follow(ctx context.Context, repo, up store.Repo, f config.Foll
 	if err != nil {
 		return
 	}
-	prefix := w.Fold.Config.Profile(up.Name).TagPrefix
+	prefix := w.Fold.Conf().Profile(up.Name).TagPrefix
 	if last == "" {
 		w.Store.SetSetting(ctx, key, tag)
 		w.feed(ctx, store.FeedRelease, 0, "%s follows %s from %s: a release after it opens a lane in %s", repo.Name, up.Name, tag, repo.Name)

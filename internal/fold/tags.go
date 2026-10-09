@@ -114,7 +114,7 @@ func (f *Fold) Reserve(ctx context.Context, repoID, laneID int64, bump string) (
 	lock.Lock()
 	defer lock.Unlock()
 
-	prefix := f.Config.Profile(repo.Name).TagPrefix
+	prefix := f.Conf().Profile(repo.Name).TagPrefix
 	tags, err := RemoteTags(ctx, repo.Path)
 	if err != nil {
 		return store.Reservation{}, err
@@ -152,7 +152,7 @@ func (f *Fold) ReleaseTag(ctx context.Context, repoID int64, tag string) error {
 // by that lane, and once the reservation's lane has merged it must contain the merge. It
 // returns a problem, or "" (and records the tag as pushed).
 func (f *Fold) checkTag(ctx context.Context, repo store.Repo, lane *store.Lane, dir, tag, sha string) (string, error) {
-	prefix := f.Config.Profile(repo.Name).TagPrefix
+	prefix := f.Conf().Profile(repo.Name).TagPrefix
 	if _, ok := ParseTag(prefix, tag); !ok {
 		return "", nil // not a release tag: not Shepherd's to judge
 	}

@@ -57,7 +57,7 @@ func TestHookPrePushRemote(t *testing.T) {
 			p.Gate = "true"
 		}
 		cfg.Repos = map[string]config.Profile{"app": p}
-		h.srv.Fold.Config = cfg
+		h.srv.Fold.SetConfig(cfg)
 	}
 	push := func(args ...string) int {
 		t.Helper()

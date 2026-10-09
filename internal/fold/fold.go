@@ -14,6 +14,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ubixsys/ubixshepherd/internal/config"
@@ -41,7 +42,9 @@ func refuse(format string, a ...any) error {
 
 // Fold opens and closes lanes.
 type Fold struct {
-	Store  store.Store
+	Store store.Store
+	// Config is the configuration until the first SetConfig; after that SetConfig's
+	// wins. A daemon that reloads its configuration calls SetConfig, never assigns this.
 	Config config.Config
 	// Exe is the shepherd binary the pre-push hook runs; empty skips installing it.
 	Exe string
@@ -49,8 +52,21 @@ type Fold struct {
 	// merged (git alone cannot tell after a squash merge or a history rewrite).
 	ForgeFor func(remote string) (forge.Forge, error)
 
+	cfg   atomic.Pointer[config.Config]
 	mu    sync.Mutex
 	repos map[int64]*sync.Mutex
+}
+
+// SetConfig replaces the configuration, safely while lanes are opened, closed and
+// checked. Each operation reads the configuration once, so a reload never splits one.
+func (f *Fold) SetConfig(c config.Config) { f.cfg.Store(&c) }
+
+// Conf is the configuration for one operation: the last SetConfig's, else Config.
+func (f *Fold) Conf() config.Config {
+	if c := f.cfg.Load(); c != nil {
+		return *c
+	}
+	return f.Config
 }
 
 // repoLock serialises git work on one repo; different repos proceed in parallel.
@@ -112,7 +128,7 @@ func (f *Fold) Open(ctx context.Context, req OpenRequest) (Opened, error) {
 	if !git.Ok(ctx, repo.Path, "check-ref-format", "--branch", req.Branch) {
 		return Opened{}, refuse("%q is not a valid branch name", req.Branch)
 	}
-	prof := f.Config.Profile(repo.Name)
+	prof := f.Conf().Profile(repo.Name)
 	wt := f.worktreePath(repo, prof, req.Name)
 	if _, err := os.Stat(wt); err == nil {
 		return Opened{}, refuse("%s already exists", wt)
@@ -521,7 +537,7 @@ func (f *Fold) GC(ctx context.Context, workspaceID int64) ([]Stale, error) {
 			out = append(out, Stale{Repo: repo.Name, Path: repo.Path, Reason: err.Error()})
 			continue
 		}
-		base := f.Config.Profile(repo.Name).BaseBranch
+		base := f.Conf().Profile(repo.Name).BaseBranch
 		target := base
 		if git.RefExists(ctx, repo.Path, "refs/remotes/origin/"+base) {
 			target = "origin/" + base

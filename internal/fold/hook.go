@@ -72,11 +72,15 @@ func (f *Fold) CheckPush(ctx context.Context, lane *store.Lane, repo *store.Repo
 // else is left alone.
 func (f *Fold) CheckPushTo(ctx context.Context, lane *store.Lane, repo *store.Repo, dir, remote string, refs []PushRef) (Verdict, error) {
 	v := Verdict{OK: true}
+	var prof config.Profile
+	if repo != nil {
+		prof = f.Conf().Profile(repo.Name)
+	}
 	if lane != nil {
 		v.Lane = lane.Name
 		if running, err := f.Store.Runs(ctx, lane.ID, store.RunRunning, 1); err == nil && len(running) > 0 {
 			switch {
-			case repo == nil || f.Config.Profile(repo.Name).Autonomy.Push != PushAgent:
+			case repo == nil || prof.Autonomy.Push != PushAgent:
 				v.Problems = append(v.Problems, fmt.Sprintf("agent run %d (%s) is going in lane %s; agents Shepherd starts never push. Review the lane's commits when it ends, then push yourself",
 					running[0].ID, running[0].Agent, lane.Name))
 			case !isOrigin(ctx, dir, remote):
@@ -89,7 +93,7 @@ func (f *Fold) CheckPushTo(ctx context.Context, lane *store.Lane, repo *store.Re
 			}
 		}
 	}
-	reserved := repo != nil && f.Config.Profile(repo.Name).Tags == config.TagsReserved
+	reserved := repo != nil && prof.Tags == config.TagsReserved
 	for _, r := range refs {
 		if zero(r.LocalSHA) {
 			continue // deleting a remote ref
@@ -134,7 +138,7 @@ func (f *Fold) CheckPushTo(ctx context.Context, lane *store.Lane, repo *store.Re
 				lane.Name, strings.Join(lane.Scope, ", "), strings.Join(firstLinesN(outside, 20), "\n    ")))
 		}
 		if repo != nil {
-			bad, err := forbiddenMessage(ctx, dir, from, r.LocalSHA, f.Config.Profile(repo.Name).Forbid)
+			bad, err := forbiddenMessage(ctx, dir, from, r.LocalSHA, prof.Forbid)
 			if err != nil {
 				return v, err
 			}

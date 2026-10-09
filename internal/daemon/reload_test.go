@@ -44,7 +44,7 @@ func TestReloadConfig(t *testing.T) {
 	if live.Daemon.MaxRuns != 2 || live.Profile("app").Autonomy.Push != config.Shepherd {
 		t.Errorf("live config not swapped: %+v", live.Daemon)
 	}
-	if s.Runner.Config.Daemon.MaxRuns != 2 || s.Fold.Config.Profile("app").Gate != "make check" {
+	if s.Runner.Conf().Daemon.MaxRuns != 2 || s.Fold.Conf().Profile("app").Gate != "make check" {
 		t.Error("the Runner and Fold still hold the old config")
 	}
 	got := lastFeed(t, s.Store)
@@ -78,7 +78,7 @@ func TestReloadRefusedKeepsConfig(t *testing.T) {
 			if err == nil || !strings.Contains(err.Error(), tc.why) {
 				t.Fatalf("reload = %v, want %q", err, tc.why)
 			}
-			if s.LiveConfig().Daemon.MaxRuns != 3 || s.Runner.Config.Daemon.MaxRuns != 3 {
+			if s.LiveConfig().Daemon.MaxRuns != 3 || s.Runner.Conf().Daemon.MaxRuns != 3 {
 				t.Error("a refused reload replaced the config")
 			}
 			got := lastFeed(t, s.Store)
@@ -102,5 +102,31 @@ func TestConfigChanges(t *testing.T) {
 		"defaults, repos.a removed, repos.b, repos.c added"
 	if got := configChanges(old, next); got != want {
 		t.Errorf("changes =\n %q\nwant\n %q", got, want)
+	}
+}
+
+// A reload while the Fold and the Runner read their config is not a data race: both
+// hold it behind an atomic pointer (run with -race to check).
+func TestReloadWhileReading(t *testing.T) {
+	s, path := reloadServer(t)
+	if err := os.WriteFile(path, []byte("daemon:\n  max_runs: 2\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for range 200 {
+			_ = s.Fold.Conf().Profile("app")
+			_ = s.Runner.Conf().Daemon.MaxRuns
+		}
+	}()
+	for range 20 {
+		if err := s.ReloadConfig(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	<-done
+	if s.Fold.Conf().Daemon.MaxRuns != 2 || s.Runner.Conf().Daemon.MaxRuns != 2 {
+		t.Error("the reloaded config is not in force")
 	}
 }

@@ -41,7 +41,7 @@ func (r *Runner) ship(ctx context.Context, run store.Run, lane store.Lane) {
 	if err != nil {
 		return
 	}
-	prof := r.conf().Profile(repo.Name)
+	prof := r.Conf().Profile(repo.Name)
 	if prof.Autonomy.Push != config.Shepherd {
 		return
 	}
@@ -111,7 +111,7 @@ func (r *Runner) Ship(ctx context.Context, laneID int64) (Shipped, error) {
 	if err != nil {
 		return out, err
 	}
-	prof := r.conf().Profile(repo.Name)
+	prof := r.Conf().Profile(repo.Name)
 	if prof.Autonomy.Push != config.Shepherd {
 		return out, refuse("%s has not opted in to Shepherd pushing (its profile's autonomy.push is %q, not %q): push lane %s yourself",
 			repo.Name, prof.Autonomy.Push, config.Shepherd, lane.Name)

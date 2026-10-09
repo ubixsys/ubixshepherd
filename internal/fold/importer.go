@@ -301,7 +301,7 @@ func (f *Fold) ImportAdopt(ctx context.Context, repoID int64, coordFile string, 
 	for _, l := range existing {
 		isLane[l.Worktree] = true
 	}
-	prof := f.Config.Profile(repo.Name)
+	prof := f.Conf().Profile(repo.Name)
 	base := prof.BaseBranch
 	target := base
 	if git.RefExists(ctx, repo.Path, "refs/remotes/origin/"+base) {

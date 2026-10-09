@@ -62,7 +62,7 @@ func (f *Fold) review(ctx context.Context, repoID int64, only string, fetch bool
 	if fetch {
 		git.Run(ctx, repo.Path, "fetch", "--quiet", "origin")
 	}
-	prof := f.Config.Profile(repo.Name)
+	prof := f.Conf().Profile(repo.Name)
 	target := prof.BaseBranch
 	if git.RefExists(ctx, repo.Path, "refs/remotes/origin/"+target) {
 		target = "origin/" + target

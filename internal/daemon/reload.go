@@ -56,21 +56,16 @@ func (s *Server) ReloadConfig(ctx context.Context) error {
 	return nil
 }
 
-// applyConfig puts cfg in force for the server, its Fold and its Runner.
-//
-// Workaround: dispatch.Runner and fold.Fold hold config.Config by value and read it
-// without a lock the daemon can take, so assigning their field can race a reader in
-// the middle of Start, Ship or a lane operation. A reload is a rare, deliberate act, so
-// the window is small, but the clean fix belongs to those packages: keep the config
-// behind an atomic.Pointer with a SetConfig method and read it once per operation.
-// Until then, this is the one place that writes their field.
+// applyConfig puts cfg in force for the server, its Fold and its Runner. Each holds it
+// behind an atomic pointer and reads it once per operation, so a reload never races
+// one going.
 func (s *Server) applyConfig(cfg config.Config) {
 	s.live.Store(&cfg)
 	if s.Fold != nil {
-		s.Fold.Config = cfg
+		s.Fold.SetConfig(cfg)
 	}
 	if s.Runner != nil {
-		s.Runner.Config = cfg
+		s.Runner.SetConfig(cfg)
 	}
 }
 

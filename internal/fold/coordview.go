@@ -80,7 +80,7 @@ func (f *Fold) WriteView(ctx context.Context, repoID int64) error {
 	if err != nil {
 		return err
 	}
-	file := f.Config.Profile(repo.Name).CoordFile
+	file := f.Conf().Profile(repo.Name).CoordFile
 	if file == "" {
 		return nil
 	}
