@@ -22,6 +22,9 @@ const (
 	EnvToken = "SHEPHERD_TOKEN"
 	// EnvURL is the daemon's API, http://host:port.
 	EnvURL = "SHEPHERD_URL"
+	// EnvClient names the client a command speaks for (desk, for the front desk's
+	// tools); an agent's environment never inherits it.
+	EnvClient = "SHEPHERD_CLIENT"
 )
 
 // Credentials mint and revoke the token a run calls the daemon with. The daemon

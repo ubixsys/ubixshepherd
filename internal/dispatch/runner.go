@@ -346,8 +346,10 @@ func (r *Runner) Start(ctx context.Context, req StartRequest) (store.Run, error)
 		return run, r.fail(ctx, run, err)
 	}
 	// The agent's tools reach the daemon with the run's own token, never the operator's:
-	// drop one inherited from whoever started the daemon.
-	cmd.Env = append(withoutEnv(os.Environ(), EnvToken, EnvURL, EnvRun),
+	// drop one inherited from whoever started the daemon. Drop the client name too: a
+	// daemon started from the front desk's tools would otherwise pass "desk" on, and
+	// the lanes an agent opened would be recorded as the desk's.
+	cmd.Env = append(withoutEnv(os.Environ(), EnvToken, EnvURL, EnvRun, EnvClient, "SHEPHERD_LANE"),
 		"GIT_TERMINAL_PROMPT=0", "SHEPHERD_LANE="+lane.Name)
 	cmd.Env = append(cmd.Env, creds...)
 	if !agentPushes {
