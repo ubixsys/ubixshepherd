@@ -104,6 +104,13 @@ Actions runs `make check` on Linux, macOS and (informational) Windows, and publi
   and `SHEPHERD_HOME` to a temp dir when running the binary by hand.
 - `core-boundary` fails if `cmd/` or `internal/` names a product. Product knowledge goes in
   a pack.
+- **Minimum git is 2.31** (`git.MinVersion` in `internal/git/version.go`): the push block
+  (`internal/dispatch/pushblock.go`) uses `GIT_CONFIG_COUNT`, which older git silently
+  ignores, and `rev-parse --path-format` is also 2.31. The daemon checks it at start
+  (`daemonRun`). Ubuntu 20.04 (2.25) and Debian 11 (2.30) are too old; Ubuntu 22.04 (2.34)
+  passes, and CI runs the suite on it. Before using a newer git feature in code or tests
+  (`worktree add --orphan` is 2.42, `git init -b` 2.28, `--show-current` 2.22), check it
+  against that floor; raising the floor means changing the constant, the README and CI.
 - Keep dependencies few: the standard library first (the CLI is `flag`, not a framework).
 
 ## Releases
