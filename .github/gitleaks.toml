@@ -1,0 +1,10 @@
+# gitleaks configuration for the CI secret scan: the default rules, plus one allowance.
+# The tests of the redaction code (and of code that must redact) contain fake tokens on
+# purpose; a real secret in a test file would still be a mistake, so the allowance is
+# limited to Go test files.
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "fake tokens in Go test fixtures"
+paths = ['''_test\.go$''']
