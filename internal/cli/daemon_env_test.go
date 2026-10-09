@@ -99,3 +99,44 @@ func TestNoGuardOutsideRun(t *testing.T) {
 // The suite may itself run inside an agent run, whose SHEPHERD_RUN would trip the
 // guard in every daemon test; tests that want it set it with t.Setenv.
 func init() { os.Unsetenv("SHEPHERD_RUN") }
+
+func TestUnsetRunEnv(t *testing.T) {
+	for k, v := range map[string]string{
+		"SHEPHERD_RUN": "7", "SHEPHERD_TOKEN": "t", "CLAUDECODE": "1", "CLAUDE_CODE_X": "y",
+		"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "k", "GIT_CONFIG_VALUE_0": "v",
+		"GIT_CONFIG_PARAMETERS": "'a=b'", "GIT_CONFIG_GLOBAL": "/g", "KEEP_ME": "1",
+	} {
+		t.Setenv(k, v)
+	}
+	unsetRunEnv()
+	for _, k := range []string{"SHEPHERD_RUN", "SHEPHERD_TOKEN", "CLAUDECODE", "CLAUDE_CODE_X",
+		"GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0", "GIT_CONFIG_PARAMETERS"} {
+		if _, ok := os.LookupEnv(k); ok {
+			t.Errorf("%s is still set", k)
+		}
+	}
+	for _, k := range []string{"GIT_CONFIG_GLOBAL", "KEEP_ME"} {
+		if os.Getenv(k) == "" {
+			t.Errorf("%s was removed", k)
+		}
+	}
+}
+
+func TestDaemonRunDropsRunEnv(t *testing.T) {
+	t.Setenv("SHEPHERD_TOKEN", "t")
+	t.Setenv("GIT_CONFIG_COUNT", "0")
+	// A bad config makes daemonRun return right after the scrub, without serving.
+	l := paths.Layout{Home: t.TempDir()}
+	if err := os.WriteFile(l.Config(), []byte(badConfig), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	env := Env{Stdout: io.Discard, Stderr: io.Discard, Layout: l, Cwd: l.Home}
+	if err := daemonRun(context.Background(), env); err == nil {
+		t.Fatal("want the config error")
+	}
+	for _, k := range []string{"SHEPHERD_TOKEN", "GIT_CONFIG_COUNT"} {
+		if _, ok := os.LookupEnv(k); ok {
+			t.Errorf("%s survived daemonRun", k)
+		}
+	}
+}

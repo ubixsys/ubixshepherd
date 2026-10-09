@@ -88,6 +88,8 @@ func runDaemon(ctx context.Context, env Env, args []string) error {
 // daemonRun runs the daemon in the foreground until interrupted or asked to stop.
 func daemonRun(ctx context.Context, env Env) error {
 	l := env.Layout
+	// Whatever started this daemon, it must not carry a run's push block or identity.
+	unsetRunEnv()
 	// Fail loudly: on a git older than the minimum the push block silently does not apply.
 	if err := git.CheckVersion(ctx, git.MinVersion); err != nil {
 		return err
