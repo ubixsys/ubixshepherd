@@ -5,7 +5,6 @@ package daemon
 import (
 	"context"
 	"crypto/rand"
-	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -55,6 +54,11 @@ type Server struct {
 	sessLocks map[string]*sync.Mutex
 	live      atomic.Pointer[config.Config]
 	reloadMu  sync.Mutex
+	// tokens are the scoped tokens minted since start; addr is where the API listens.
+	tokens tokens
+	addr   atomic.Pointer[string]
+	// deskHuman says whether the daemon's front desk is in a turn the person started.
+	deskHuman atomic.Pointer[func() bool]
 }
 
 // NewServer returns a Server with a fresh random token.
@@ -101,51 +105,56 @@ func NewLogger() *slog.Logger {
 	return newLogger(os.Stderr, LogLevel(""))
 }
 
-// Handler is the API, behind token authentication.
+// Handler is the API, behind token authentication. Each route says which scoped roles
+// may call it (see auth.go); the operator token may call every one.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET "+api.PathStatus, s.status)
-	mux.HandleFunc("GET "+api.PathWorkspaces, s.listWorkspaces)
-	mux.HandleFunc("POST "+api.PathWorkspaces, s.saveWorkspace)
-	mux.HandleFunc("GET "+api.PathResolve, s.resolve)
-	mux.HandleFunc("POST "+api.PathShutdown, s.shutdown)
-	mux.HandleFunc("GET "+api.PathLanes, s.listLanes)
-	mux.HandleFunc("POST "+api.PathLanes, s.openLane)
-	mux.HandleFunc("POST "+api.PathLanes+"/{id}/close", s.closeLane)
-	mux.HandleFunc("POST "+api.PathLanes+"/{id}/scope", s.rescopeLane)
-	mux.HandleFunc("POST "+api.PathLanes+"/{id}/ship", s.withRunner(s.shipLane))
-	mux.HandleFunc("GET "+api.PathFoldGC, s.foldGC)
-	mux.HandleFunc("POST "+api.PathPrePush, s.prePush)
-	mux.HandleFunc("POST /v1/repos/{id}/hook", s.repoHook)
-	mux.HandleFunc("POST "+api.PathRuns, s.withRunner(s.startRun))
-	mux.HandleFunc("GET "+api.PathRuns, s.listRuns)
-	mux.HandleFunc("GET "+api.PathRuns+"/{id}", s.getRun)
-	mux.HandleFunc("GET "+api.PathRuns+"/{id}/log", s.runLog)
-	mux.HandleFunc("POST "+api.PathRuns+"/{id}/stop", s.withRunner(s.stopRun))
-	mux.HandleFunc("POST "+api.PathRuns+"/{id}/events", s.withRunner(s.addEvent))
-	mux.HandleFunc("GET "+api.PathRuns+"/{id}/events", s.runEvents)
-	mux.HandleFunc("POST "+api.PathRuns+"/{id}/decisions", s.withRunner(s.addDecision))
-	mux.HandleFunc("GET "+api.PathDecisions, s.listDecisions)
-	mux.HandleFunc("GET "+api.PathFeed, s.feed)
-	mux.HandleFunc("POST "+api.PathFoldImport, s.foldImport)
-	mux.HandleFunc("POST "+api.PathFoldView, s.foldView)
-	mux.HandleFunc("POST "+api.PathFoldReview, s.foldReview)
-	mux.HandleFunc("POST "+api.PathFoldRetire, s.foldRetire)
-	mux.HandleFunc("POST "+api.PathSessionsImport, s.importSessions)
-	mux.HandleFunc("GET "+api.PathSessions, s.listSessions)
-	mux.HandleFunc("POST "+api.PathSessions+"/{id}/ask", s.askSession)
-	mux.HandleFunc("GET "+api.PathTags, s.listTags)
-	mux.HandleFunc("POST "+api.PathTagsReserve, s.reserveTag)
-	mux.HandleFunc("POST "+api.PathTagsRelease, s.releaseTag)
-	mux.HandleFunc("GET "+api.PathSpend, s.spendToday)
-	mux.HandleFunc("POST "+api.PathSpend, s.withRunner(s.addSpend))
-	mux.HandleFunc("GET "+api.PathSettings+"/{key}", s.getSetting)
-	mux.HandleFunc("PUT "+api.PathSettings+"/{key}", s.putSetting)
-	mux.HandleFunc("POST "+api.PathRuns+"/{id}/requests", s.withRunner(s.addRequest))
-	mux.HandleFunc("GET "+api.PathRequests, s.listRequests)
-	mux.HandleFunc("POST "+api.PathRequests+"/{id}/route", s.withRunner(s.routeRequest))
-	mux.HandleFunc("POST "+api.PathRequests+"/{id}/close", s.withRunner(s.closeRequest))
-	mux.HandleFunc("POST "+api.PathDecisions+"/{id}/answer", s.withRunner(s.answerDecision))
+	handle := func(pattern string, a access, h http.HandlerFunc) { mux.HandleFunc(pattern, guard(a, h)) }
+	const desk, worker, own = forDesk, forWorker, ownRun
+	handle("GET "+api.PathStatus, desk|worker, s.status)
+	handle("GET "+api.PathWorkspaces, desk, s.listWorkspaces)
+	handle("POST "+api.PathWorkspaces, operatorOnly, s.saveWorkspace)
+	handle("GET "+api.PathResolve, desk|worker, s.resolve)
+	handle("POST "+api.PathShutdown, operatorOnly, s.shutdown)
+	handle("GET "+api.PathLanes, desk, s.listLanes)
+	handle("POST "+api.PathLanes, desk, s.openLane)
+	handle("POST "+api.PathLanes+"/{id}/close", desk, s.closeLane)
+	handle("POST "+api.PathLanes+"/{id}/scope", operatorOnly, s.rescopeLane)
+	handle("POST "+api.PathLanes+"/{id}/ship", desk, s.withRunner(s.shipLane))
+	handle("GET "+api.PathFoldGC, desk, s.foldGC)
+	handle("POST "+api.PathPrePush, worker, s.prePush)
+	handle("POST /v1/repos/{id}/hook", operatorOnly, s.repoHook)
+	handle("POST "+api.PathRuns, desk, s.withRunner(s.startRun))
+	handle("GET "+api.PathRuns, desk, s.listRuns)
+	handle("GET "+api.PathRuns+"/{id}", desk|own, s.getRun)
+	handle("GET "+api.PathRuns+"/{id}/log", desk|own, s.runLog)
+	handle("POST "+api.PathRuns+"/{id}/stop", desk, s.withRunner(s.stopRun))
+	handle("POST "+api.PathRuns+"/{id}/events", own, s.withRunner(s.addEvent))
+	handle("GET "+api.PathRuns+"/{id}/events", desk|own, s.runEvents)
+	handle("POST "+api.PathRuns+"/{id}/decisions", own, s.withRunner(s.addDecision))
+	handle("POST "+api.PathRuns+"/{id}/requests", own, s.withRunner(s.addRequest))
+	handle("GET "+api.PathDecisions, desk, s.listDecisions)
+	// The desk may answer only in a turn the person started: answerDecision checks.
+	handle("POST "+api.PathDecisions+"/{id}/answer", desk, s.personsAnswer(s.withRunner(s.answerDecision)))
+	handle("GET "+api.PathFeed, desk, s.feed)
+	handle("POST "+api.PathFoldImport, operatorOnly, s.foldImport)
+	handle("POST "+api.PathFoldView, operatorOnly, s.foldView)
+	handle("POST "+api.PathFoldReview, desk, s.foldReview)
+	handle("POST "+api.PathFoldRetire, operatorOnly, s.foldRetire)
+	handle("POST "+api.PathSessionsImport, operatorOnly, s.importSessions)
+	handle("GET "+api.PathSessions, desk, s.listSessions)
+	handle("POST "+api.PathSessions+"/{id}/ask", desk, s.askSession)
+	handle("GET "+api.PathTags, desk, s.listTags)
+	// A worker reserves and releases for its own lane only: the handlers check.
+	handle("POST "+api.PathTagsReserve, desk|worker, s.reserveTag)
+	handle("POST "+api.PathTagsRelease, worker, s.releaseTag)
+	handle("GET "+api.PathSpend, desk, s.spendToday)
+	handle("POST "+api.PathSpend, operatorOnly, s.withRunner(s.addSpend))
+	handle("GET "+api.PathSettings+"/{key}", operatorOnly, s.getSetting)
+	handle("PUT "+api.PathSettings+"/{key}", operatorOnly, s.putSetting)
+	handle("GET "+api.PathRequests, desk, s.listRequests)
+	handle("POST "+api.PathRequests+"/{id}/route", desk, s.withRunner(s.routeRequest))
+	handle("POST "+api.PathRequests+"/{id}/close", desk, s.withRunner(s.closeRequest))
 	return s.logRequests(s.auth(mux))
 }
 
@@ -165,7 +174,19 @@ func (s *Server) withRunner(h http.HandlerFunc) http.HandlerFunc {
 type statusWriter struct {
 	http.ResponseWriter
 	code int
+	// role is the caller's role, once auth knows it.
+	role string
 }
+
+// Flush lets a streaming handler flush through the writer.
+func (w *statusWriter) Flush() {
+	if f, ok := w.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+// Unwrap gives http.ResponseController the writer underneath.
+func (w *statusWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
 func (w *statusWriter) WriteHeader(code int) {
 	w.code = code
@@ -202,24 +223,9 @@ func (s *Server) logRequests(next http.Handler) http.Handler {
 		if r.Method == http.MethodGet && r.URL.Path == api.PathStatus {
 			return
 		}
-		client := r.Header.Get(api.ClientHeader)
-		if client == "" {
-			client = "unknown"
-		}
 		took := time.Since(start)
-		s.Log.Log(r.Context(), requestLevel(r.Method, sw.code, took), "request", "client", client,
-			"method", r.Method, "path", r.URL.Path, "status", sw.code, "ms", took.Milliseconds())
-	})
-}
-
-func (s *Server) auth(next http.Handler) http.Handler {
-	want := []byte("Bearer " + s.Token)
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), want) != 1 {
-			writeError(w, http.StatusUnauthorized, errors.New("missing or wrong token"))
-			return
-		}
-		next.ServeHTTP(w, r)
+		s.Log.Log(r.Context(), requestLevel(r.Method, sw.code, took), "request", "client", clientName(r),
+			"method", r.Method, "path", r.URL.Path, "status", sw.code, "ms", took.Milliseconds(), "role", sw.role)
 	})
 }
 
@@ -1080,6 +1086,13 @@ func (s *Server) reserveTag(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &req) {
 		return
 	}
+	if lane, err := s.workerLane(r); err != nil {
+		s.foldError(w, err)
+		return
+	} else if lane != nil && (req.LaneID != lane.ID || req.RepoID != lane.RepoID) {
+		writeError(w, http.StatusForbidden, fmt.Errorf("an agent's token reserves only for its own lane, %s", lane.Name))
+		return
+	}
 	res, err := s.Fold.Reserve(r.Context(), req.RepoID, req.LaneID, req.Bump)
 	if errors.Is(err, store.ErrConflict) {
 		writeError(w, http.StatusConflict, err)
@@ -1125,6 +1138,13 @@ func (s *Server) releaseTag(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &req) {
 		return
 	}
+	if lane, err := s.workerLane(r); err != nil {
+		s.foldError(w, err)
+		return
+	} else if lane != nil && !s.reservedFor(r.Context(), req.RepoID, req.Tag, lane.ID) {
+		writeError(w, http.StatusForbidden, fmt.Errorf("an agent's token releases only its own lane's reservations, and %s is not one of lane %s's", req.Tag, lane.Name))
+		return
+	}
 	if err := s.Fold.ReleaseTag(r.Context(), req.RepoID, req.Tag); err != nil {
 		s.foldError(w, err)
 		return
@@ -1132,6 +1152,20 @@ func (s *Server) releaseTag(w http.ResponseWriter, r *http.Request) {
 	s.Store.AddFeed(r.Context(), store.FeedTag, req.Tag+" released", 0)
 	s.refreshView(req.RepoID)
 	writeJSON(w, http.StatusOK, req)
+}
+
+// reservedFor says whether tag is reserved in the repo for the lane.
+func (s *Server) reservedFor(ctx context.Context, repoID int64, tag string, laneID int64) bool {
+	rs, err := s.Store.Reservations(ctx, repoID)
+	if err != nil {
+		return false
+	}
+	for _, res := range rs {
+		if res.Tag == tag && res.LaneID == laneID {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) spendToday(w http.ResponseWriter, r *http.Request) {
@@ -1391,7 +1425,10 @@ func (s *Server) Run(ctx context.Context, runtimePath string) error {
 	}
 	defer os.Remove(runtimePath)
 
+	s.addr.Store(&rt.Addr)
 	if s.Runner != nil {
+		// Each run's agent gets its own worker token, never the operator's.
+		s.Runner.SetCredentials(s)
 		s.ReapOrphans(ctx)
 		if err := s.Runner.Recover(ctx); err != nil {
 			return err

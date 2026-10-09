@@ -97,8 +97,9 @@ type Runner struct {
 	routeMu sync.Mutex
 	// said holds the ids of requests the person or the front desk routed: their runs
 	// are not Shepherd's own, so the daily budget does not hold them.
-	said sync.Map
-	cfg  atomic.Pointer[config.Config]
+	said  sync.Map
+	cfg   atomic.Pointer[config.Config]
+	creds atomic.Pointer[Credentials]
 }
 
 // QuotaPause is how long an agent out of quota is held when its CLI does not say when
@@ -165,6 +166,9 @@ func (r *Runner) Conf() config.Config {
 type proc struct {
 	cmd     *exec.Cmd
 	stopped bool
+	// token is the run's worker token, hidden in its output; revoke ends it.
+	token  string
+	revoke func()
 }
 
 // Recover marks runs a previous daemon left running as interrupted. Call it once at
@@ -336,16 +340,23 @@ func (r *Runner) Start(ctx context.Context, req StartRequest) (store.Run, error)
 	cmd.Dir = lane.Worktree
 	// The prompt, then end of input: headless, and off the command line (see Adapter).
 	cmd.Stdin = strings.NewReader(prompt)
-	cmd.Env = append(os.Environ(),
-		"GIT_TERMINAL_PROMPT=0",
-		fmt.Sprintf("SHEPHERD_RUN=%d", run.ID), "SHEPHERD_LANE="+lane.Name,
-	)
+	creds, token, revoke, err := r.grant(ctx, run.ID, lane.Worktree)
+	if err != nil {
+		logf.Close()
+		return run, r.fail(ctx, run, err)
+	}
+	// The agent's tools reach the daemon with the run's own token, never the operator's:
+	// drop one inherited from whoever started the daemon.
+	cmd.Env = append(withoutEnv(os.Environ(), EnvToken, EnvURL, EnvRun),
+		"GIT_TERMINAL_PROMPT=0", "SHEPHERD_LANE="+lane.Name)
+	cmd.Env = append(cmd.Env, creds...)
 	if !agentPushes {
 		cmd.Env = append(cmd.Env, pushBlock(ctx, lane.Worktree)...)
 	}
 	cmd.SysProcAttr = groupAttr()
 	out, err := cmd.StdoutPipe()
 	if err != nil {
+		revoke()
 		logf.Close()
 		return run, r.fail(ctx, run, err)
 	}
@@ -358,6 +369,7 @@ func (r *Runner) Start(ctx context.Context, req StartRequest) (store.Run, error)
 	fmt.Fprintf(logf, "# shepherd run %d: %s in lane %s (%s), %s, started %s\n# task: %s\n\n",
 		run.ID, ad.Name, lane.Name, repo.Name, how, time.Now().Format(time.RFC3339), redact.String(firstLine(req.Prompt)))
 	if err := cmd.Start(); err != nil {
+		revoke()
 		logf.Close()
 		return run, r.fail(ctx, run, err)
 	}
@@ -365,7 +377,7 @@ func (r *Runner) Start(ctx context.Context, req StartRequest) (store.Run, error)
 	if err := r.Store.UpdateRun(ctx, run); err != nil {
 		r.Log.Error("record run pid", "run", run.ID, "err", err)
 	}
-	p := &proc{cmd: cmd}
+	p := &proc{cmd: cmd, token: token, revoke: revoke}
 	r.procs[run.ID] = p
 	r.wg.Add(1)
 	go r.watch(run, ad, lane, p, out, logf)
@@ -420,10 +432,12 @@ func (r *Runner) watch(run store.Run, ad Adapter, lane store.Lane, p *proc, out 
 			run.CostUSD, run.Credits = out.USD, out.Credits // the session's latest total
 		}
 		if out.Show != "" {
-			fmt.Fprintln(logf, redact.String(out.Show))
+			fmt.Fprintln(logf, scrub(out.Show, p.token))
 		}
 	}
 	err := p.cmd.Wait()
+	// The agent is gone: so is what it could call the daemon with.
+	p.revoke()
 
 	ctx := context.Background()
 	now := time.Now().UTC()
@@ -726,6 +740,23 @@ func ReadLog(path string, offset int64, max int) ([]byte, int64, error) {
 		return nil, offset, err
 	}
 	return buf[:n], offset + int64(n), nil
+}
+
+// withoutEnv is env without the named variables.
+func withoutEnv(env []string, names ...string) []string {
+	out := env[:0:0]
+	for _, kv := range env {
+		keep := true
+		for _, n := range names {
+			if strings.HasPrefix(kv, n+"=") {
+				keep = false
+			}
+		}
+		if keep {
+			out = append(out, kv)
+		}
+	}
+	return out
 }
 
 // SetLookPath replaces how a runner finds agent executables (for tests in other packages).
