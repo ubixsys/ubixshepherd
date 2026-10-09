@@ -27,6 +27,9 @@ protocol) is listed under **Interface changes** in the release that makes it.
   as one digest when nobody was attached. A turn it takes on its own cannot answer a
   decision. Each turn's own cost is recorded as `desk` spend. `shepherd chat` keeps its
   own desk for now. See `docs/design.md` §3.18.
+- **A feed stream.** `GET /v1/feed/stream` sends the feed as server-sent events, each
+  item with its event kind, resumable by id or `Last-Event-ID`, with a heartbeat every
+  15 seconds and a limit on subscribers. `GET /v1/feed` is unchanged.
 
 ### Interface changes
 

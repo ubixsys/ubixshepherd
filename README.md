@@ -144,7 +144,8 @@ Swarm events (a run ended, a decision waits, a request needs routing) wake this 
 its own as `desk.wake` says: `attached`, the default, only while a client follows it, and
 otherwise as one digest when the next one attaches; `always`; or `never`. A turn the desk
 takes on its own cannot answer a decision, only one the person started. Each turn's cost
-is recorded as `desk` spend.
+is recorded as `desk` spend. `GET /v1/feed/stream` streams the feed the same way, so
+clients need not poll `GET /v1/feed`.
 
 ### Moving a repo onto Shepherd
 
