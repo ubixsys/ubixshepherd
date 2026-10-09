@@ -59,7 +59,8 @@ Actions runs `make check` on Linux, macOS and (informational) Windows, and publi
 - `shepherd mcp` (`internal/cli/mcp.go`) maps each MCP tool onto a CLI command and runs
   it with output captured. Add a tool by adding a command first, then its mapping.
 - `internal/dispatch` starts agents (`lane run`). Adapters for Claude Code, Copilot and
-  Cursor use the repo's `agent.permission_mode` (default `auto`) and push/merge autonomy.
+  Cursor use the repo's `agent.permission_mode` (default `auto`), `agent.model` and push/merge
+  autonomy. `desk.model` and `/model` choose the front desk's model.
   Agents can push when `autonomy.push: agent`; on GitLab, `autonomy.merge: agent` lets
   them arm merge-when-pipeline-succeeds, still subject to forge rules. `lane ship` is an
   explicit Shepherd ship for repos set to `push: shepherd`, after the repo gate passes;
@@ -74,9 +75,11 @@ Actions runs `make check` on Linux, macOS and (informational) Windows, and publi
   continuing the asking run's session (`dispatch.Runner.Answer`), at once or when the run
   ends. Never let an agent answer a decision: `decision_answer` takes the person's words.
 - Routing between lanes is `internal/dispatch/route.go`: deterministic rules start the
-  target agent or explain why they cannot. The dispatch core can close requests; requests
-  addressed to the person become decisions. The close operation is not yet exposed through
-  the CLI or MCP. Anything needing routing judgment waits for the front desk; `Route` runs
+  target agent or explain why they cannot. Requests
+  addressed to the person become decisions. `shepherd request close <id> [--why]`
+  (`runRequest` in `internal/cli/decision.go`), the `request_close` MCP tool and the desk's
+  tools close a stale request through `Runner.CloseRequest`, which refuses one already
+  replied to, failed or closed. Anything needing routing judgment waits for the front desk; `Route` runs
   whenever a run ends and when a quota hold lifts.
 - `shepherd chat` is `internal/chat`: a Bubble Tea model over the daemon's feed, with a
   front desk (`ClaudeDesk`) run headless and resumed per turn. The thread prints inline to

@@ -37,7 +37,7 @@ has the commands), unpack it and put `shepherd` on your PATH, for example in
 go install github.com/ubixsys/ubixshepherd/cmd/shepherd@v0.1.0-beta.1
 ```
 
-A `go install` build reports its version as `dev`: only builds made with `make` stamp it.
+A `go install` build reports the module version Go recorded (`v0.1.0-beta.1` above); a build from a checkout with plain `go build` reports `dev`, and only builds made with `make` stamp the version.
 
 **From source:** clone the repo and run `make install` (below).
 
@@ -123,6 +123,7 @@ sessions.
 | `/sessions` | your adopted conversations (also listed beside the thread) |
 | `/attach 71ffa009` | step into that conversation in Claude Code; exit it to come back |
 | `/ask 71ffa009 …` | ask that conversation a question; the answer lands in the thread |
+| `/model` | show the desk's model and where it came from; `/model opus` sets it, `/model reset` goes back to `config.yaml` |
 | `/new` | start a new conversation with the desk |
 
 ### Moving a repo onto Shepherd
@@ -348,13 +349,16 @@ comes back into the asker's conversation. A review goes to a different provider 
 the author, in a fresh session, and may not change files. A request Shepherd cannot route by rule (no lane named, or a lane with no agent yet)
 explains why and waits for the front desk or you. Requests addressed to the person become
 decisions; a routed request starts the target agent when its lane is free, or says what is
-holding it. The dispatch core can close a request, but no CLI or MCP command exposes that
-operation yet. An agent out of quota is held until the limit resets. Chains are capped at
+holding it. A request that has gone stale is closed without a reply with
+`shepherd request close <id> --why "..."`, which keeps the reason on the request; a target
+agent already working on it is left to finish, but its reply is not carried back. A request
+that has already been replied to, failed or closed is refused. An agent out of quota is held until the limit resets. Chains are capped at
 three requests.
 
 ```sh
 shepherd request list                  # requests between lanes, and their replies
 shepherd request route 4 --lane docs/api --agent cursor   # route one Shepherd could not
+shepherd request close 5 --why "no longer needed"          # close a stale one, keeping the reason
 ```
 
 ### From Claude Code (MCP)
@@ -362,7 +366,7 @@ shepherd request route 4 --lane docs/api --agent cursor   # route one Shepherd c
 `shepherd mcp` serves Shepherd's operator tools over MCP on stdio: `shepherd_status`,
 `shepherd_where`, `lane_list`, `lane_open`, `lane_close`, `lane_ship`, `lane_run`, `run_list`,
 `run_status`, `run_continue`, `run_stop`, `decision_list`, `decision_answer`,
-`request_list`, `request_route` and `fold_gc`. (`shepherd mcp --worker` is the agents' own set, described above.) Each runs the CLI
+`request_list`, `request_route`, `request_close` and `fold_gc`. (`shepherd mcp --worker` is the agents' own set, described above.) Each runs the CLI
 command of the same name. Register it once, then start Claude Code at the workspace root
 and ask in plain words ("open a lane in myrepo for the login fix, scoped to src/auth"):
 
@@ -417,6 +421,11 @@ repos:
     branch_model: promotion
     promotion: [dev, staging, main]
 ```
+
+Other settings worth knowing: `daemon.log_level` (`debug`, `info`, `warn` or `error`,
+applied on reload), `desk.model` (the front desk's model, overridden by `shepherd chat
+--model` or `/model`), and `agent.model` per repo (a model per agent, used when `lane run`
+names none).
 
 ## Branches and releases
 

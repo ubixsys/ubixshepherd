@@ -9,6 +9,22 @@ protocol) is listed under **Interface changes** in the release that makes it.
 
 ## [Unreleased]
 
+### Added
+
+- **Close a request.** `shepherd request close <id> [--why TEXT]` and the `request_close`
+  tool (also available to the front desk) close a stale request without a reply and keep
+  the reason. A request already replied to, failed or closed is refused.
+- **Model settings.** `desk.model` sets the front desk's model, `/model` shows, sets or
+  resets it in the chat, and `agent.model` sets a model per agent for a repo.
+- **`daemon.log_level`** chooses what the daemon logs, applied on reload.
+
+### Changed
+
+- A `go install` build reports the module version Go recorded instead of `dev`.
+- The daemon backs off from a forge host that cannot be reached.
+- `autonomy.push: agent` works: the pre-push hook tells the daemon which remote is being
+  pushed to, and an agent's push is allowed only to the lane repo's `origin`.
+
 ## [0.1.0-beta.1] - 2026-10-09
 
 The first public release: a beta. Shepherd runs as one daemon per machine over a
@@ -97,8 +113,7 @@ thread. Interfaces may still change between betas; see
   no Windows service manager yet, and SIGHUP reload is not available there.
 - **Not built yet:** workspace-wide leases (scopes are leased per repo), typed and
   cross-repo work orders, triage, `verified-on:<env>` proofs, and the merge discipline
-  checks proposed in [docs/roadmap.md](docs/roadmap.md). Closing a request is not
-  exposed through the CLI or MCP.
+  checks proposed in [docs/roadmap.md](docs/roadmap.md).
 - **The web UI is a preview.** Its sources are in `web/` and it runs from a dev server
   against a running daemon; the daemon does not serve it.
 - **`push: agent` relies on the pre-push hook, which an agent could bypass**
