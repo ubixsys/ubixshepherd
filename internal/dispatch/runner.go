@@ -115,6 +115,33 @@ type outOfQuota struct {
 	run int64
 }
 
+// projectContext is what the repo's project adds to its agents' standing text: the
+// approved brief (never a draft) with its age, and the declared caches. It is nil for a
+// repo in no project, and for a project with neither.
+func (r *Runner) projectContext(ctx context.Context, cfg config.Config, repo string) (*ProjectContext, error) {
+	name, ok := cfg.ProjectOf(repo)
+	if !ok {
+		return nil, nil
+	}
+	p := cfg.Project(name)
+	pc := &ProjectContext{Name: name, MaxAge: p.MaxAge()}
+	b, err := r.Store.ApprovedBrief(ctx, name)
+	switch {
+	case err == nil:
+		pc.Brief, pc.Age = b.Text, b.Age(time.Now().UTC())
+	case !errors.Is(err, store.ErrNotFound):
+		return nil, err
+	}
+	for _, c := range p.Caches {
+		cr, recipe, _ := c.Recipe()
+		pc.Caches = append(pc.Caches, Cache{Path: c.Path, Repo: cr, Recipe: recipe, Note: c.Note})
+	}
+	if strings.TrimSpace(pc.Brief) == "" && len(pc.Caches) == 0 {
+		return nil, nil
+	}
+	return pc, nil
+}
+
 // quotaHeld says why an agent cannot start for now, or "". Call it with r.mu held.
 func (r *Runner) quotaHeld(agent string) string {
 	q, ok := r.outOf[agent]
@@ -333,10 +360,18 @@ func (r *Runner) Start(ctx context.Context, req StartRequest) (store.Run, error)
 		worker = r.Exe
 	}
 	if !resume {
-		note := ad.Note
-		if b := prof.Brief; b != "" {
-			note = strings.TrimSpace(note + "\nThis repo's rules: " + b)
+		pc, err := r.projectContext(ctx, cfg, repo.Name)
+		if err != nil {
+			logf.Close()
+			return run, r.fail(ctx, run, err)
 		}
+		// In a project the layers are the workspace's, the project's, then the repo's own;
+		// otherwise the profile's brief is the repo's rules, as before.
+		repoRules, workspace := prof.Brief, ""
+		if pc != nil {
+			workspace, repoRules = cfg.Defaults.Brief, cfg.Repos[repo.Name].Brief
+		}
+		note := Standing(ad.Note, workspace, pc, repoRules)
 		prompt = Brief(req.Prompt, lane.Name, repo.Name, lane.Branch, lane.Base, lane.Worktree, lane.Scope, gate, may, worker != "", note)
 	}
 	agentPushes := may.Push == config.Agent

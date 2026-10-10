@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/ubixsys/ubixshepherd/internal/config"
+	"github.com/ubixsys/ubixshepherd/internal/redact"
 )
 
 // Adapter describes one agent CLI.
@@ -405,6 +406,84 @@ type Powers struct {
 	GitLab bool
 	// Forbid are the patterns commit messages must not match.
 	Forbid []string
+}
+
+// ProjectContext is what a project adds to the standing text of an agent in one of its
+// repos: the approved brief, with its age, and the build caches it declares. Only an
+// approved brief is ever put here; a draft never reaches an agent.
+type ProjectContext struct {
+	Name string
+	// Brief is the approved text; "" when the project has none approved.
+	Brief string
+	// Age is the time since approval and MaxAge is brief_max_age.
+	Age, MaxAge time.Duration
+	Caches      []Cache
+}
+
+// Cache is a build cache an agent is told about: where it is, and the recipe in a real
+// repo that makes it.
+type Cache struct {
+	Path, Repo, Recipe, Note string
+}
+
+// AgeText states an age as a person would: "today", "1 day ago", "41 days ago".
+func AgeText(age time.Duration) string {
+	switch days := int(age / (24 * time.Hour)); days {
+	case 0:
+		return "today"
+	case 1:
+		return "1 day ago"
+	default:
+		return fmt.Sprintf("%d days ago", days)
+	}
+}
+
+// Standing layers what an agent is told about its context, outermost first: the
+// adapter's note, the workspace's rules, the project's approved brief and caches, then
+// the repo's own rules. The repo's wins on a conflict, and a conflict is for the person.
+// The project's brief is stored text, so it is redacted as other stored agent text is;
+// the rest comes from configuration. With no
+// project the layers are the adapter's note and this repo's rules, as they were.
+func Standing(note, workspace string, p *ProjectContext, repo string) string {
+	var parts []string
+	add := func(s string) {
+		if s = strings.TrimSpace(s); s != "" {
+			parts = append(parts, s)
+		}
+	}
+	add(note)
+	if p == nil || (p.Brief == "" && len(p.Caches) == 0) {
+		// Nothing from a project: the repo's rules are the profile's, as before.
+		if repo = strings.TrimSpace(repo); repo != "" {
+			add("This repo's rules: " + repo)
+		}
+		return strings.Join(parts, "\n")
+	}
+	if w := strings.TrimSpace(workspace); w != "" {
+		add("The workspace's rules: " + w)
+	}
+	if b := strings.TrimSpace(p.Brief); b != "" {
+		head := fmt.Sprintf("Project %s's brief (approved %s", p.Name, AgeText(p.Age))
+		if p.MaxAge > 0 && p.Age > p.MaxAge {
+			head += fmt.Sprintf("; past the project's %d-day limit, so the focus may have moved: check it with the person before relying on it", int(p.MaxAge/(24*time.Hour)))
+		}
+		add(head + "):\n" + redact.String(b))
+	}
+	if len(p.Caches) > 0 {
+		var b strings.Builder
+		fmt.Fprintf(&b, "Project %s's build caches, made from recipes in real repos. Rebuild one from its recipe; do not hand-patch it, and do not commit to it:", p.Name)
+		for _, c := range p.Caches {
+			fmt.Fprintf(&b, "\n- %s: made by %s in repo %s", c.Path, c.Recipe, c.Repo)
+			if c.Note != "" {
+				b.WriteString(". " + c.Note)
+			}
+		}
+		add(b.String())
+	}
+	if repo = strings.TrimSpace(repo); repo != "" {
+		add("This repo's rules (they win over the project's where they conflict; a conflict is for the person, so raise it rather than choosing): " + repo)
+	}
+	return strings.Join(parts, "\n")
 }
 
 // Brief wraps a task with what every agent needs to know about its lane, so the same

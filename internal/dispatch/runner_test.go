@@ -792,3 +792,91 @@ func TestPromptOnStdinNotArgv(t *testing.T) {
 		})
 	}
 }
+
+// approveBrief stores an approved project brief the way the person would: drafted by the
+// desk, approved by them.
+func approveBrief(t *testing.T, st store.Store, project, text string) {
+	t.Helper()
+	ctx := context.Background()
+	d, err := st.SaveBriefDraft(ctx, project, text, "desk")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.ApproveBrief(ctx, d.ID, "person"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRunInProjectGetsApprovedBriefLayered(t *testing.T) {
+	f := newFixture(t, "quick")
+	ctx := context.Background()
+	cfg := config.Default()
+	cfg.Defaults.Brief = "WORKSPACE-RULE"
+	cfg.Repos = map[string]config.Profile{"app": {Brief: "REPO-RULE"}}
+	cfg.Projects = map[string]config.Project{"shop": {
+		Repos:  []string{"app"},
+		Caches: []config.Cache{{Path: "/build/objs", MadeBy: "app:tools/objs.sh", Note: "Slow to make."}},
+	}}
+	f.runner.Config = cfg
+	approveBrief(t, f.st, "shop", "PROJECT-FOCUS token glpat-AbCdEfGhIjKlMnOpQrStUv")
+	// A newer draft is the person's to approve; the agent never sees it.
+	if _, err := f.st.SaveBriefDraft(ctx, "shop", "DRAFT-FOCUS", "desk"); err != nil {
+		t.Fatal(err)
+	}
+
+	run, err := f.runner.Start(ctx, StartRequest{LaneID: f.lane.ID, Agent: "claude", Prompt: "do it"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := stdinOf(t, f.wait(t, run.ID))
+	at := -1
+	for _, want := range []string{"WORKSPACE-RULE", "PROJECT-FOCUS", "/build/objs", "REPO-RULE"} {
+		i := strings.Index(in, want)
+		if i < 0 || i < at {
+			t.Fatalf("%q missing or out of order in:\n%s", want, in)
+		}
+		at = i
+	}
+	for _, want := range []string{"approved today", "made by tools/objs.sh in repo app", "Slow to make.", "[REDACTED]"} {
+		if !strings.Contains(in, want) {
+			t.Errorf("prompt lacks %q:\n%s", want, in)
+		}
+	}
+	if strings.Contains(in, "DRAFT-FOCUS") || strings.Contains(in, "glpat-") {
+		t.Errorf("prompt has a draft or an unredacted secret:\n%s", in)
+	}
+}
+
+func TestRunWithoutProjectBriefIsUnchanged(t *testing.T) {
+	ctx := context.Background()
+	for name, mutate := range map[string]func(*config.Config){
+		"no project": func(c *config.Config) {},
+		"project with nothing approved or declared": func(c *config.Config) {
+			c.Projects = map[string]config.Project{"shop": {Repos: []string{"app"}}}
+		},
+		"a draft only": func(c *config.Config) {
+			c.Projects = map[string]config.Project{"shop": {Repos: []string{"app"}}}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t, "quick")
+			cfg := config.Default()
+			cfg.Defaults.Brief = "INHERITED-RULE"
+			mutate(&cfg)
+			f.runner.Config = cfg
+			if name == "a draft only" {
+				if _, err := f.st.SaveBriefDraft(ctx, "shop", "DRAFT-FOCUS", "desk"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			run, err := f.runner.Start(ctx, StartRequest{LaneID: f.lane.ID, Agent: "claude", Prompt: "do it"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			in := stdinOf(t, f.wait(t, run.ID))
+			if !strings.Contains(in, "This repo's rules: INHERITED-RULE") || strings.Contains(in, "Project ") || strings.Contains(in, "DRAFT-FOCUS") || strings.Contains(in, "workspace's rules") {
+				t.Errorf("prompt changed:\n%s", in)
+			}
+		})
+	}
+}
