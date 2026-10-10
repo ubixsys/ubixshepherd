@@ -169,6 +169,12 @@ type proc struct {
 	// token is the run's worker token, hidden in its output; revoke ends it.
 	token  string
 	revoke func()
+	// done is closed when the process has ended; lastOut is when it last printed
+	// (UnixNano); idle, with idled set under Runner.mu, is the limit that stopped it.
+	done    chan struct{}
+	lastOut atomic.Int64
+	idle    time.Duration
+	idled   bool
 }
 
 // Recover marks runs a previous daemon left running as interrupted. Call it once at
@@ -334,9 +340,10 @@ func (r *Runner) Start(ctx context.Context, req StartRequest) (store.Run, error)
 		prompt = Brief(req.Prompt, lane.Name, repo.Name, lane.Branch, lane.Base, lane.Worktree, lane.Scope, gate, may, worker != "", note)
 	}
 	agentPushes := may.Push == config.Agent
-	cmd := exec.Command(bin, ad.Args(Opts{Model: req.Model, Gate: gate, Worktree: lane.Worktree,
+	opts := Opts{Model: req.Model, Gate: gate, Worktree: lane.Worktree,
 		Session: session, Resume: resume, Worker: worker,
-		Mode: prof.Agent.PermissionMode, Push: agentPushes, Merge: may.Merge})...)
+		Mode: prof.Agent.PermissionMode, Push: agentPushes, Merge: may.Merge}
+	cmd := exec.Command(bin, ad.Args(opts)...)
 	cmd.Dir = lane.Worktree
 	// The prompt, then end of input: headless, and off the command line (see Adapter).
 	cmd.Stdin = strings.NewReader(prompt)
@@ -352,6 +359,9 @@ func (r *Runner) Start(ctx context.Context, req StartRequest) (store.Run, error)
 	cmd.Env = append(withoutEnv(os.Environ(), EnvToken, EnvURL, EnvRun, EnvClient, "SHEPHERD_LANE"),
 		"GIT_TERMINAL_PROMPT=0", "SHEPHERD_LANE="+lane.Name)
 	cmd.Env = append(cmd.Env, creds...)
+	if ad.Env != nil {
+		cmd.Env = append(cmd.Env, ad.Env(opts)...)
+	}
 	if !agentPushes {
 		cmd.Env = append(cmd.Env, pushBlock(ctx, lane.Worktree)...)
 	}
@@ -379,10 +389,17 @@ func (r *Runner) Start(ctx context.Context, req StartRequest) (store.Run, error)
 	if err := r.Store.UpdateRun(ctx, run); err != nil {
 		r.Log.Error("record run pid", "run", run.ID, "err", err)
 	}
-	p := &proc{cmd: cmd, token: token, revoke: revoke}
+	p := &proc{cmd: cmd, token: token, revoke: revoke, done: make(chan struct{})}
+	p.lastOut.Store(time.Now().UnixNano())
 	r.procs[run.ID] = p
 	r.wg.Add(1)
+	if ad.Idle != nil {
+		p.idle = ad.Idle()
+	}
 	go r.watch(run, ad, lane, p, out, logf)
+	if p.idle > 0 {
+		go r.idleWatch(run.ID, p)
+	}
 	r.Log.Info("run started", "run", run.ID, "agent", ad.Name, "lane", lane.Name, "pid", run.PID)
 	verb := "started"
 	if resume {
@@ -412,6 +429,7 @@ func (r *Runner) watch(run store.Run, ad Adapter, lane store.Lane, p *proc, out 
 	lines, limitAt := 0, 0
 	for sc.Scan() {
 		line := sc.Text()
+		p.lastOut.Store(time.Now().UnixNano())
 		lines++
 		if ad.Limit != nil {
 			if l, ok := ad.Limit(line); ok {
@@ -438,21 +456,26 @@ func (r *Runner) watch(run store.Run, ad Adapter, lane store.Lane, p *proc, out 
 		}
 	}
 	err := p.cmd.Wait()
+	close(p.done)
 	// The agent is gone: so is what it could call the daemon with.
 	p.revoke()
 
 	ctx := context.Background()
 	now := time.Now().UTC()
 	run.Ended = &now
+	why := "" // set when Shepherd, not the agent's exit code, made the run fail
 	code := p.cmd.ProcessState.ExitCode()
 	run.ExitCode = &code
 	r.mu.Lock()
-	stopped, closing := p.stopped, r.closing
+	stopped, closing, idled := p.stopped, r.closing, p.idled
 	delete(r.procs, run.ID)
 	r.mu.Unlock()
 	switch {
 	case stopped:
 		run.State = store.RunStopped
+	case idled:
+		why = fmt.Sprintf("hung: printed nothing for %s, so Shepherd stopped it", p.idle)
+		run.State, run.Error = store.RunFailed, why
 	case err == nil && code == 0:
 		run.State = store.RunSucceeded
 	case closing:
@@ -484,6 +507,10 @@ func (r *Runner) watch(run store.Run, ad Adapter, lane store.Lane, p *proc, out 
 			}
 		}
 	}
+	if ad.NoChangeFails && run.State == store.RunSucceeded && r.changedNothing(ctx, run, lane) {
+		why = fmt.Sprintf("%s exited 0 but changed nothing: no commit, no file change and nothing asked or reported; see the run log", ad.Name)
+		run.State, run.Error = store.RunFailed, why
+	}
 	if ad.SessionCost {
 		r.sessionCost(ctx, &run)
 	}
@@ -499,6 +526,9 @@ func (r *Runner) watch(run store.Run, ad Adapter, lane store.Lane, p *proc, out 
 		fmt.Fprintf(logf, "; outside the scope: %s", strings.Join(run.Outside, ", "))
 	}
 	fmt.Fprintln(logf)
+	if why != "" {
+		fmt.Fprintf(logf, "# shepherd: %s\n", why)
+	}
 	logf.Close()
 	if err := r.Store.UpdateRun(ctx, run); err != nil {
 		r.Log.Error("record run outcome", "run", run.ID, "err", err)
@@ -510,6 +540,9 @@ func (r *Runner) watch(run store.Run, ad Adapter, lane store.Lane, p *proc, out 
 	}
 	if run.Commits > 0 {
 		r.feed(ctx, store.FeedCommit, run.ID, "run %d: %d commit(s) in lane %s, latest: %s", run.ID, run.Commits, lane.Name, clip(latestSubject(ctx, lane.Worktree), 100))
+	}
+	if why != "" {
+		ended += ": " + why
 	}
 	r.feed(ctx, outcomeKind(run.State), run.ID, "%s", ended)
 	if !quotaUntil.IsZero() {
@@ -642,17 +675,80 @@ func (r *Runner) Stop(ctx context.Context, id int64) error {
 	if !ok {
 		return refuse("run %d is not running", id)
 	}
+	r.terminateThenKill(id, p)
+	return nil
+}
+
+// terminateThenKill asks the agent to end, and kills it if it has not after a grace period.
+func (r *Runner) terminateThenKill(id int64, p *proc) {
 	terminate(p.cmd)
 	go func() {
-		time.Sleep(10 * time.Second)
-		r.mu.Lock()
-		_, still := r.procs[id]
-		r.mu.Unlock()
-		if still {
+		select {
+		case <-p.done:
+		case <-time.After(10 * time.Second):
 			kill(p.cmd)
 		}
 	}()
-	return nil
+}
+
+// idleWatch stops a run that prints nothing for p.idle: it is hung, and would otherwise
+// hold its lane for ever.
+func (r *Runner) idleWatch(id int64, p *proc) {
+	tick := min(max(p.idle/4, 10*time.Millisecond), 5*time.Second)
+	t := time.NewTicker(tick)
+	defer t.Stop()
+	for {
+		select {
+		case <-p.done:
+			return
+		case <-t.C:
+			if time.Since(time.Unix(0, p.lastOut.Load())) < p.idle {
+				continue
+			}
+			r.mu.Lock()
+			already := p.stopped || r.closing
+			p.idled = !already
+			r.mu.Unlock()
+			if !already {
+				r.Log.Warn("run printed nothing; stopping it", "run", id, "idle", p.idle)
+				r.terminateThenKill(id, p)
+			}
+			return
+		}
+	}
+}
+
+// changedNothing says a run left its lane as it found it: HEAD where it was, a clean
+// worktree, and nothing the run asked or reported through Shepherd's tools.
+func (r *Runner) changedNothing(ctx context.Context, run store.Run, lane store.Lane) bool {
+	if run.EndSHA == "" || run.EndSHA != run.StartSHA {
+		return false
+	}
+	if out, err := git.Run(ctx, lane.Worktree, "status", "--porcelain"); err != nil || strings.TrimSpace(out) != "" {
+		return false
+	}
+	if ev, err := r.Store.Events(ctx, run.ID); err != nil || len(ev) > 0 {
+		return false
+	}
+	if ds, err := r.Store.Decisions(ctx, ""); err != nil {
+		return false
+	} else {
+		for _, d := range ds {
+			if d.RunID == run.ID {
+				return false
+			}
+		}
+	}
+	if rs, err := r.Store.Requests(ctx); err != nil {
+		return false
+	} else {
+		for _, q := range rs {
+			if q.FromRun == run.ID {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // Shutdown stops every running agent and waits for their outcomes to be recorded, up

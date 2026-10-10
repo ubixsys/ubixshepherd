@@ -9,7 +9,7 @@ package dispatch
 //     opencode.json must not carry Shepherd's permissions. The run's config (provider,
 //     permissions, worker tools) goes in OPENCODE_CONFIG_CONTENT, which OpenCode layers
 //     over the files it finds. Nothing is written to the worktree or to the person's
-//     home. See openCodeEnv for how the runner's environment gets it.
+//     home, and the variable is in the run's environment only (Adapter.Env).
 //   - The session id is in every JSON event, so it is read from the output; a run is
 //     resumed with -s.
 //   - The version is pinned to the major the adapter was tested with, checked each time
@@ -57,6 +57,9 @@ var openCodeSettings = func() config.OpenCode {
 	}
 	return c.OpenCode
 }
+
+// openCodeIdle is the idle limit of a run; tests replace it.
+var openCodeIdle = func() time.Duration { return openCodeSettings().Idle() }
 
 // openCodeBin finds the executable: opencode.bin, else PATH, else the standalone
 // installer's ~/.opencode/bin. "" when there is none.
@@ -163,7 +166,6 @@ func openCodeArgs(o Opts) []string {
 	if m := openCodeModel(o.Model, s.Endpoint != ""); m != "" {
 		a = append(a, "-m", m)
 	}
-	openCodeEnv(o, s)
 	return a
 }
 
@@ -179,20 +181,9 @@ func openCodeModel(model string, haveEndpoint bool) string {
 	return model
 }
 
-// envMu orders openCodeEnv's change to the process environment.
-var envMu sync.Mutex
-
-// openCodeEnv puts the run's config in OPENCODE_CONFIG_CONTENT in this process's
-// environment, because Adapter.Args is all the runner gives an adapter and the child
-// inherits the environment. That is safe only because Runner.Start builds the command
-// line and reads os.Environ() for the child under the same lock (r.mu): the value
-// cannot change between the two, and each opencode run sets its own. The cost is that
-// the variable stays in the daemon's environment, where only another opencode run
-// reads it. A per-run Env hook on Adapter would replace this.
-func openCodeEnv(o Opts, s config.OpenCode) {
-	envMu.Lock()
-	defer envMu.Unlock()
-	os.Setenv(openCodeEnvVar, openCodeConfig(o, s))
+// openCodeRunEnv is the run's environment: its config, in OPENCODE_CONFIG_CONTENT.
+func openCodeRunEnv(o Opts) []string {
+	return []string{openCodeEnvVar + "=" + openCodeConfig(o, openCodeSettings())}
 }
 
 // kv is one JSON object member; objects are built in order because OpenCode's

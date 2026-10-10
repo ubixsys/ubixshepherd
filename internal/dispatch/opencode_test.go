@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ubixsys/ubixshepherd/internal/config"
 	"github.com/ubixsys/ubixshepherd/internal/store"
@@ -33,6 +34,13 @@ case "$MODE" in
   noedit)
     ev text '{"type":"text","text":"I will fix it now.\n<tool_call>"}'
     ev step_finish '{"type":"step-finish","reason":"stop","tokens":{"input":100,"output":5},"cost":0}'
+    exit 0 ;;
+  wait)
+    sleep 1
+    exit 0 ;;
+  hang)
+    ev text '{"type":"text","text":"working"}'
+    sleep 30
     exit 0 ;;
   apierror)
     printf '{"type":"error","sessionID":"%s","error":{"name":"UnknownError","data":{"message":"Unexpected server error"}}}\n' "$S"
@@ -139,8 +147,15 @@ func TestOpenCodeNoEditIsNotQuietSuccess(t *testing.T) {
 	if !strings.Contains(log, "WARNING the model printed a tool call as text and changed nothing") {
 		t.Errorf("log:\n%s", log)
 	}
-	if done.Commits != 0 {
-		t.Errorf("commits = %d", done.Commits)
+	// Exit 0 with nothing changed is a failure the person sees, with the reason.
+	if done.State != store.RunFailed || *done.ExitCode != 0 || !strings.Contains(done.Error, "changed nothing") {
+		t.Errorf("run = %s (exit %d), error %q", done.State, *done.ExitCode, done.Error)
+	}
+	if !strings.Contains(log, "# shepherd: opencode exited 0 but changed nothing") {
+		t.Errorf("log:\n%s", log)
+	}
+	if k := feedKind(t, f, "changed nothing"); k != store.FeedRunFailed {
+		t.Errorf("feed kind = %q", k)
 	}
 }
 
@@ -342,4 +357,97 @@ func gitStatus(t *testing.T, f *fixture) string {
 		t.Fatal(err)
 	}
 	return strings.TrimSpace(string(out))
+}
+
+func TestOpenCodeNoChangeIsNotFailedWhenTheRunAsked(t *testing.T) {
+	f := openCodeFixture(t, "wait")
+	run, err := f.runner.Start(context.Background(), StartRequest{LaneID: f.lane.ID, Agent: "opencode", Prompt: "ask first"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A run that reported through Shepherd's tools did something, even if it changed no file.
+	if _, err := f.runner.Record(context.Background(), store.Event{RunID: run.ID, Kind: EventReport, Status: "blocked", Text: "need the schema"}); err != nil {
+		t.Fatal(err)
+	}
+	if done := f.wait(t, run.ID); done.State != store.RunSucceeded {
+		t.Errorf("run = %s, error %q", done.State, done.Error)
+	}
+}
+
+func TestNoChangeStaysSucceededForOtherAgents(t *testing.T) {
+	// Another agent's no-change run stays succeeded: the verdict is the adapter's.
+	f := newFixture(t, "quick")
+	run, err := f.runner.Start(context.Background(), StartRequest{LaneID: f.lane.ID, Agent: "claude", Prompt: "x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if done := f.wait(t, run.ID); done.State != store.RunSucceeded || done.Commits != 0 {
+		t.Errorf("claude run = %s, %d commit(s), error %q", done.State, done.Commits, done.Error)
+	}
+}
+
+func TestOpenCodeIdleRunIsStoppedAndFailed(t *testing.T) {
+	old := openCodeIdle
+	openCodeIdle = func() time.Duration { return 400 * time.Millisecond }
+	t.Cleanup(func() { openCodeIdle = old })
+	f := openCodeFixture(t, "hang")
+	start := time.Now()
+	run, err := f.runner.Start(context.Background(), StartRequest{LaneID: f.lane.ID, Agent: "opencode", Prompt: "fix it"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := f.wait(t, run.ID)
+	if time.Since(start) > 15*time.Second {
+		t.Errorf("took %s: not stopped for being idle", time.Since(start))
+	}
+	if done.State != store.RunFailed || !strings.Contains(done.Error, "printed nothing for 400ms") {
+		t.Errorf("run = %s, error %q", done.State, done.Error)
+	}
+	if k := feedKind(t, f, "printed nothing"); k != store.FeedRunFailed {
+		t.Errorf("feed kind = %q", k)
+	}
+}
+
+func TestOpenCodeSilenceUnderTheLimitIsNotIdle(t *testing.T) {
+	// A run that was quiet for less than the limit is not idle.
+	old := openCodeIdle
+	openCodeIdle = func() time.Duration { return 2500 * time.Millisecond }
+	t.Cleanup(func() { openCodeIdle = old })
+	f := openCodeFixture(t, "wait") // prints, then sleeps 1s: under the limit
+	run, err := f.runner.Start(context.Background(), StartRequest{LaneID: f.lane.ID, Agent: "opencode", Prompt: "x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.runner.Record(context.Background(), store.Event{RunID: run.ID, Kind: EventReport, Status: "progress", Text: "p"})
+	if done := f.wait(t, run.ID); done.State != store.RunSucceeded {
+		t.Errorf("run = %s, error %q", done.State, done.Error)
+	}
+}
+
+func TestOpenCodeConfigIsInTheRunsEnvironmentOnly(t *testing.T) {
+	t.Setenv(openCodeEnvVar, "") // so the check below is of this test's runs
+	os.Unsetenv(openCodeEnvVar)
+	f := openCodeFixture(t, "ok")
+	run, err := f.runner.Start(context.Background(), StartRequest{LaneID: f.lane.ID, Agent: "opencode", Prompt: "one"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := f.wait(t, run.ID)
+	if !strings.Contains(configOf(t, logOf(t, done)), `"permission"`) {
+		t.Errorf("the run did not get its config:\n%s", logOf(t, done))
+	}
+	if v, ok := os.LookupEnv(openCodeEnvVar); ok {
+		t.Errorf("%s is set in the daemon after Start: %.40s", openCodeEnvVar, v)
+	}
+	// Another agent started afterwards does not see it.
+	printer := filepath.Join(t.TempDir(), "agent")
+	os.WriteFile(printer, []byte("#!/bin/sh\ncat >/dev/null\necho \"OC=[$OPENCODE_CONFIG_CONTENT]\"\n"), 0o755)
+	f.runner.lookPath = func(string) (string, error) { return printer, nil }
+	other, err := f.runner.Start(context.Background(), StartRequest{LaneID: f.lane.ID, Agent: "claude", Prompt: "two"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if log := logOf(t, f.wait(t, other.ID)); !strings.Contains(log, "OC=[]") {
+		t.Errorf("another agent inherited the config:\n%s", log)
+	}
 }
