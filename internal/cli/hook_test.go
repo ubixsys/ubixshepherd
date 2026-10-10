@@ -15,9 +15,19 @@ import (
 	"github.com/ubixsys/ubixshepherd/internal/store"
 )
 
+// clearRunEnv blanks the variables a run Shepherd started carries, so a test that
+// relies on the runtime file behaves the same inside and outside an agent run.
+func clearRunEnv(t *testing.T) {
+	t.Helper()
+	for _, name := range []string{dispatch.EnvURL, dispatch.EnvToken, dispatch.EnvRun, "SHEPHERD_LANE", dispatch.EnvClient} {
+		t.Setenv(name, "")
+	}
+}
+
 // The hook passes git's remote argument through to the daemon, which lets a running
 // agent push its own lane to origin only when the repo says autonomy.push: agent.
 func TestHookPrePushRemote(t *testing.T) {
+	clearRunEnv(t)
 	h := newHarness(t, "", false)
 	root, app := laneWorkspace(t)
 	if code := h.run("init", root, "--yes"); code != 0 {
@@ -94,6 +104,7 @@ func TestHookPrePushRemote(t *testing.T) {
 // SHEPHERD_TOKEN, with no runtime file to read; only when both are unset does the hook
 // fall back to the runtime file.
 func TestHookPrePushPrefersTheRunsToken(t *testing.T) {
+	clearRunEnv(t)
 	h := newHarness(t, "", false)
 	root, app := laneWorkspace(t)
 	if code := h.run("init", root, "--yes"); code != 0 {
