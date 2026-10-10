@@ -166,7 +166,7 @@ func firstOf(s ...string) string {
 // into the daemon.
 var remoteOK = map[string]bool{
 	"status": true, "where": true, "lane": true, "run": true, "decision": true,
-	"request": true, "tag": true, "mcp": true, "host": true, "version": true,
+	"request": true, "tag": true, "stats": true, "mcp": true, "host": true, "version": true,
 }
 
 // remoteRefusal explains why a command cannot take --host, or returns "" if it can.

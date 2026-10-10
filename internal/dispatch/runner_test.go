@@ -30,6 +30,7 @@ echo "fake agent in $(pwd), run $SHEPHERD_RUN, lane $SHEPHERD_LANE, client [$SHE
 echo "ARGS: $(printf '%s ' "$@" | tr '\n' ' ')"
 echo "STDIN: $(printf '%s' "$prompt" | tr '\n' ' ')"
 case "$MODE" in quick) [ -n "$CREDITS" ] && echo "AI Credits $CREDITS (13s)"; [ -n "$COST" ] && echo "{\"type\":\"result\",\"subtype\":\"success\",\"total_cost_usd\":$COST}"; echo "copilot --resume=cop-$SHEPHERD_RUN-session"; exit 0 ;; esac
+case "$MODE" in stream) cat "$STREAM_FILE"; exit 0 ;; esac
 case "$MODE" in sleep) sleep 30 ;; esac
 case "$MODE" in limit) echo "ActionRequiredError: You've hit your usage limit. Upgrade to continue."; exit 1 ;; esac
 case "$MODE" in mention) echo "fixing: You've hit your usage limit in the error text"; seq 1 30; exit 1 ;; esac

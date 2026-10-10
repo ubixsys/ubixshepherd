@@ -2,6 +2,7 @@ package desk
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -491,8 +492,16 @@ func (d *Desk) run(t turn) {
 	var partial strings.Builder
 	produced := false
 	tokens, total := 0, 0.0
+	var stats *store.Usage
+	spent := 0.0 // what this turn added to the desk's cost
 	emit := func(l Line) {
 		switch l.Kind {
+		case KindStats:
+			var u store.Usage
+			if json.Unmarshal([]byte(l.Text), &u) == nil {
+				stats = &u
+			}
+			return
 		case KindUsage:
 			tokens, _ = strconv.Atoi(l.Text)
 			return
@@ -502,7 +511,7 @@ func (d *Desk) run(t turn) {
 			return
 		case store.DeskCost:
 			total, _ = strconv.ParseFloat(l.Text, 64)
-			d.cost(bg, session, l.Text, add)
+			spent = d.cost(bg, session, l.Text, add)
 			return
 		}
 		partial.Reset()
@@ -524,6 +533,9 @@ func (d *Desk) run(t turn) {
 		// The stream ended without the whole reply: keep what came.
 		add(store.DeskAssistant, redact.String(rest))
 		produced = true
+	}
+	if stats != nil {
+		d.usage(bg, t.id, *stats, spent)
 	}
 	d.mu.Lock()
 	interrupted, renewed := d.interrupted, d.gen != gen
@@ -633,11 +645,11 @@ func (d *Desk) notes(ctx context.Context, model string, in summaryInput) string 
 // cost records what the turn added to the session's cost. Claude Code reports the
 // session's total, so the turn's own is the difference from the last total recorded for
 // this session (dispatch.SessionDelta).
-func (d *Desk) cost(ctx context.Context, session, total string, add func(kind, text string)) {
+func (d *Desk) cost(ctx context.Context, session, total string, add func(kind, text string)) float64 {
 	o := d.m.o
 	usd, err := strconv.ParseFloat(total, 64)
 	if err != nil || usd <= 0 {
-		return
+		return 0
 	}
 	before := 0.0
 	if last, _ := o.Store.Setting(ctx, settingCost(d.ws.ID)); last != "" {
@@ -648,10 +660,20 @@ func (d *Desk) cost(ctx context.Context, session, total string, add func(kind, t
 	o.Store.SetSetting(ctx, settingCost(d.ws.ID), session+" "+total)
 	delta := dispatch.SessionDelta(usd, before)
 	if delta <= 0 {
-		return
+		return 0
 	}
 	d.spend(ctx, delta)
 	add(store.DeskCost, strconv.FormatFloat(delta, 'f', -1, 64))
+	return delta
+}
+
+// usage records a turn's tokens and context beside what it cost.
+func (d *Desk) usage(ctx context.Context, turn int64, u store.Usage, usd float64) {
+	o := d.m.o
+	u.Day, u.Kind, u.WorkspaceID, u.Turn, u.Agent, u.CostUSD = dispatch.Today(), store.UsageDesk, d.ws.ID, turn, "claude", usd
+	if err := o.Store.AddUsage(ctx, u); err != nil {
+		o.Log.Error("desk: record usage", "err", err)
+	}
 }
 
 // spend records what the desk cost.

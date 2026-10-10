@@ -202,6 +202,8 @@ type proc struct {
 	lastOut atomic.Int64
 	idle    time.Duration
 	idled   bool
+	// usage reads the tokens the agent's output reports; nil if the CLI reports none.
+	usage UsageReader
 }
 
 // Recover marks runs a previous daemon left running as interrupted. Call it once at
@@ -431,6 +433,9 @@ func (r *Runner) Start(ctx context.Context, req StartRequest) (store.Run, error)
 	if ad.Idle != nil {
 		p.idle = ad.Idle()
 	}
+	if ad.Usage != nil {
+		p.usage = ad.Usage(opts)
+	}
 	go r.watch(run, ad, lane, p, out, logf)
 	if p.idle > 0 {
 		go r.idleWatch(run.ID, p)
@@ -474,6 +479,9 @@ func (r *Runner) watch(run store.Run, ad Adapter, lane store.Lane, p *proc, out 
 		// The latest id an agent reports wins, in case resuming ever moves a session.
 		if id := ad.SessionIn(line); id != "" {
 			run.Session = id
+		}
+		if p.usage != nil {
+			p.usage.Feed(line)
 		}
 		out := Output{Show: line}
 		if ad.Read != nil {
@@ -550,6 +558,7 @@ func (r *Runner) watch(run store.Run, ad Adapter, lane store.Lane, p *proc, out 
 		r.sessionCost(ctx, &run)
 	}
 	r.Spend(ctx, store.Spend{Source: run.Agent, Ref: run.ID, USD: run.CostUSD, Credits: run.Credits})
+	use := r.recordUsage(ctx, run, p)
 	fmt.Fprintf(logf, "\n# shepherd: run %d %s (exit %d) with %d commit(s)", run.ID, run.State, code, run.Commits)
 	if run.CostUSD > 0 {
 		fmt.Fprintf(logf, ", $%.2f", run.CostUSD)
@@ -561,6 +570,9 @@ func (r *Runner) watch(run store.Run, ad Adapter, lane store.Lane, p *proc, out 
 		fmt.Fprintf(logf, "; outside the scope: %s", strings.Join(run.Outside, ", "))
 	}
 	fmt.Fprintln(logf)
+	if use.Measured() {
+		fmt.Fprintf(logf, "# shepherd: usage: %s\n", use.Line())
+	}
 	if why != "" {
 		fmt.Fprintf(logf, "# shepherd: %s\n", why)
 	}
@@ -592,6 +604,24 @@ func (r *Runner) watch(run store.Run, ad Adapter, lane store.Lane, p *proc, out 
 	r.deliverAnswers(ctx, run.ID)
 	r.Route(ctx)
 	r.ship(ctx, run, lane)
+}
+
+// recordUsage stores the tokens and context the run's output reported, with the run's
+// own cost. A CLI that reports no tokens still leaves a record, so the run is counted.
+func (r *Runner) recordUsage(ctx context.Context, run store.Run, p *proc) store.Usage {
+	var u store.Usage
+	if p.usage != nil {
+		u = p.usage.Usage()
+	}
+	u.Day, u.Kind, u.RunID, u.Agent = Today(), store.UsageRun, run.ID, run.Agent
+	if u.Model == "" {
+		u.Model = run.Model
+	}
+	u.CostUSD, u.Credits = run.CostUSD, run.Credits
+	if err := r.Store.AddUsage(ctx, u); err != nil {
+		r.Log.Error("record run usage", "run", run.ID, "err", err)
+	}
+	return u
 }
 
 // Answer records a person's answer to a decision and carries it back into the asking

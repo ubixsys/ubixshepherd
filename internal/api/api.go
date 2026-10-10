@@ -122,6 +122,11 @@ type SpendToday struct {
 	BySource  map[string]store.Spend `json:"by_source"`
 }
 
+// PathUsage is GET /v1/usage?from=DAY&to=DAY (local days, "2006-01-02", inclusive; both
+// default to today): the tokens and context sizes of the range's runs and desk turns, as
+// store.UsageStats.
+const PathUsage = "/v1/usage"
+
 // PathFeed is GET /v1/feed?after=N (or after=latest for the newest id only).
 const PathFeed = "/v1/feed"
 
@@ -217,6 +222,10 @@ type RunView struct {
 	Lane     string `json:"lane"`
 	Repo     string `json:"repo"`
 	Worktree string `json:"worktree"`
+	// Usage is what the run's tokens and context came to, once it has ended and its
+	// agent reported any; nil on a run still going and on runs from before it was kept.
+	// Only a single run's view (GET /v1/runs/{id}) carries it.
+	Usage *store.Usage `json:"usage,omitempty"`
 }
 
 // RunLog answers GET /v1/runs/{id}/log?offset=N: the next piece of the log.

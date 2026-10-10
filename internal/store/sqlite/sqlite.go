@@ -246,6 +246,31 @@ var migrations = []string{
 	ALTER TABLE requests ADD COLUMN version TEXT;
 	CREATE INDEX requests_project ON requests (project) WHERE project IS NOT NULL;
 	CREATE INDEX spend_ref ON spend (ref) WHERE ref != 0;`,
+	// Usage: the tokens and context size of each agent run and front desk turn, beside
+	// the dollars in spend. Counts an agent CLI does not report stay 0. A run has one row.
+	`CREATE TABLE usage (
+		id                    INTEGER PRIMARY KEY,
+		day                   TEXT NOT NULL,
+		kind                  TEXT NOT NULL,
+		run_id                INTEGER NOT NULL DEFAULT 0,
+		workspace_id          INTEGER NOT NULL DEFAULT 0,
+		turn                  INTEGER NOT NULL DEFAULT 0,
+		agent                 TEXT NOT NULL,
+		model                 TEXT NOT NULL DEFAULT '',
+		context_window        INTEGER NOT NULL DEFAULT 0,
+		requests              INTEGER NOT NULL DEFAULT 0,
+		input_tokens          INTEGER NOT NULL DEFAULT 0,
+		cache_read_tokens     INTEGER NOT NULL DEFAULT 0,
+		cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
+		output_tokens         INTEGER NOT NULL DEFAULT 0,
+		peak_context          INTEGER NOT NULL DEFAULT 0,
+		compactions           INTEGER NOT NULL DEFAULT 0,
+		cost_usd              REAL NOT NULL DEFAULT 0,
+		credits               REAL NOT NULL DEFAULT 0,
+		created               TEXT NOT NULL
+	);
+	CREATE INDEX usage_day ON usage (day);
+	CREATE UNIQUE INDEX usage_run ON usage (run_id) WHERE run_id != 0;`,
 }
 
 // DB is a SQLite-backed store.Store.

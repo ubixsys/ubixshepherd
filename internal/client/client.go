@@ -372,6 +372,21 @@ func (c *Client) SpendToday(ctx context.Context) (api.SpendToday, error) {
 	return out, c.do(ctx, http.MethodGet, api.PathSpend, nil, &out)
 }
 
+// Usage returns the tokens and context sizes of the days from to to inclusive
+// ("2006-01-02"); "" for either is today.
+func (c *Client) Usage(ctx context.Context, from, to string) (store.UsageStats, error) {
+	q := url.Values{}
+	if from != "" {
+		q.Set("from", from)
+	}
+	if to != "" {
+		q.Set("to", to)
+	}
+	var out store.UsageStats
+	err := c.do(ctx, http.MethodGet, api.PathUsage+"?"+q.Encode(), nil, &out)
+	return out, err
+}
+
 func (c *Client) AddSpend(ctx context.Context, sp store.Spend) error {
 	var out store.Spend
 	return c.do(ctx, http.MethodPost, api.PathSpend, sp, &out)

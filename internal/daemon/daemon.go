@@ -170,6 +170,7 @@ func (s *Server) Handler() http.Handler {
 	handle("POST "+api.PathTagsReserve, desk|worker, s.reserveTag)
 	handle("POST "+api.PathTagsRelease, worker, s.releaseTag)
 	handle("GET "+api.PathSpend, desk, s.spendToday)
+	handle("GET "+api.PathUsage, desk, s.usageStats)
 	handle("POST "+api.PathSpend, operatorOnly, s.withRunner(s.addSpend))
 	handle("GET "+api.PathSettings+"/{key}", operatorOnly, s.getSetting)
 	handle("PUT "+api.PathSettings+"/{key}", operatorOnly, s.putSetting)
@@ -720,6 +721,13 @@ func (s *Server) getRun(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
+	switch u, err := s.Store.RunUsage(r.Context(), run.ID); {
+	case err == nil:
+		v.Usage = &u
+	case !errors.Is(err, store.ErrNotFound):
+		s.fail(w, err)
+		return
+	}
 	writeJSON(w, http.StatusOK, v)
 }
 
@@ -1234,6 +1242,34 @@ func (s *Server) spendToday(w http.ResponseWriter, r *http.Request) {
 		out.CreditUSD = *c
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// usageStats answers GET /v1/usage for a range of local days, today by default.
+func (s *Server) usageStats(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	from, to := q.Get("from"), q.Get("to")
+	if from == "" {
+		from = dispatch.Today()
+	}
+	if to == "" {
+		to = dispatch.Today()
+	}
+	for _, day := range []string{from, to} {
+		if _, err := time.Parse("2006-01-02", day); err != nil {
+			writeError(w, http.StatusBadRequest, fmt.Errorf("%q is not a day (want YYYY-MM-DD)", day))
+			return
+		}
+	}
+	if from > to {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("from %s is after to %s", from, to))
+		return
+	}
+	st, err := s.Store.UsageStats(r.Context(), from, to)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, st)
 }
 
 // addSpend records what a client spent outside a run: the front desk's turns.

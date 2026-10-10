@@ -69,6 +69,9 @@ type Adapter struct {
 	// returns, dollars or credits, so an adapter that starts reading a cost sets it
 	// when its CLI counts the session.
 	SessionCost bool
+	// Usage starts a reader of the tokens and context the CLI's output reports; nil for
+	// a CLI that reports none.
+	Usage func(o Opts) UsageReader
 	// Limit reads a line that says the agent's account is out of quota or past a usage
 	// limit.
 	Limit func(line string) (Limit, bool)
@@ -235,6 +238,7 @@ var adapters = map[string]Adapter{
 		SessionIn:  func(string) string { return "" },
 		Attach:     func(session, _ string) []string { return []string{"--resume", session} },
 		Read:       claudeOutput,
+		Usage:      func(o Opts) UsageReader { return NewClaudeUsage(!o.Resume) },
 		// total_cost_usd on a resumed session is the session's total, not the run's.
 		SessionCost: true,
 		Limit:       claudeLimit,
@@ -303,6 +307,13 @@ var adapters = map[string]Adapter{
 		Attach: func(session, _ string) []string { return []string{"-s", session} },
 		Note:   "You run on a small local model, so keep to small mechanical edits. Make one tool call at a time through the tool interface, never write a tool call out as text. Shepherd's tools are named shepherd_ask_human, shepherd_ask_shepherd and shepherd_report. Commit with `git add` then `git commit`. Do not write tests in a typed codebase: stop and say so instead.",
 		Read:   openCodeOutput,
+		Usage: func(Opts) UsageReader {
+			window := 0
+			if s := openCodeSettings(); s.Endpoint != "" {
+				window, _ = s.Limits()
+			}
+			return NewOpenCodeUsage(window)
+		},
 		// The run's config goes in the run's environment alone (see opencode.go).
 		Env:           openCodeRunEnv,
 		NoChangeFails: true,

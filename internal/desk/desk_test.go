@@ -48,8 +48,8 @@ case "$msg" in "please sleep"*) sleep 30 ;; "please wait"*) sleep 1 ;; esac
 case "$msg" in *"please fail"*) echo "the model is gone" >&2; exit 1 ;; esac
 echo '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"lo"}}}'
 echo '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"mcp__shepherd__lane_list","input":{"repo":"app"}}]}}'
-printf '{"type":"assistant","message":{"usage":{"input_tokens":3,"cache_read_input_tokens":%s},"content":[{"type":"text","text":"reply %s"}]}}\n' "$((tokens-3))" "$n"
-printf '{"type":"result","subtype":"success","total_cost_usd":%s}\n' "$c"
+printf '{"type":"assistant","message":{"id":"msg_%s","model":"fake-model","usage":{"input_tokens":3,"cache_read_input_tokens":%s,"output_tokens":9},"content":[{"type":"text","text":"reply %s"}]}}\n' "$n" "$((tokens-3))" "$n"
+printf '{"type":"result","subtype":"success","total_cost_usd":%s,"modelUsage":{"fake-model":{"costUSD":%s,"contextWindow":200000}}}\n' "$c" "$c"
 `
 
 type fakeTokens struct {
@@ -225,6 +225,37 @@ func TestResumeAndCostDifference(t *testing.T) {
 	spent, _ := r.st.SpendOn(context.Background(), time.Now().Format("2006-01-02"))
 	if got := spent[store.OriginDesk].USD; got < 0.2499 || got > 0.2501 {
 		t.Errorf("desk spend = %v, want 0.25", got)
+	}
+}
+
+// Each turn leaves a usage record: its model and window, the largest request's prompt
+// as its peak, and the cost it added, not the session's total.
+func TestTurnsRecordUsage(t *testing.T) {
+	r := newRig(t, nil)
+	d := r.desk(t)
+	ctx := context.Background()
+	d.Send(ctx, "one")
+	r.waitEnded(t, 1)
+	os.WriteFile(filepath.Join(filepath.Dir(r.log), "tokens"), []byte("250000"), 0o644)
+	d.Send(ctx, "two")
+	r.waitEnded(t, 2)
+
+	day := time.Now().Format("2006-01-02")
+	st, err := r.st.UsageStats(ctx, day, day)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Desk.Count != 2 || st.Desk.Measured != 2 || st.Runs.Count != 0 {
+		t.Fatalf("stats = %+v", st)
+	}
+	if st.Desk.PeakContext != 250_000 || st.Desk.Over200k != 1 || st.Desk.ContextWindow != 200_000 || st.Desk.Output != 18 {
+		t.Errorf("desk = %+v", st.Desk)
+	}
+	if got := st.Desk.CostUSD; got < 0.2499 || got > 0.2501 {
+		t.Errorf("desk cost = %v, want 0.25", got)
+	}
+	if len(st.DeskByModel) != 1 || st.DeskByModel[0].Key != "fake-model" || st.DeskByModel[0].Count != 2 {
+		t.Errorf("by model = %+v", st.DeskByModel)
 	}
 }
 

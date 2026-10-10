@@ -32,7 +32,13 @@ const KindPartial = "partial"
 // cache tokens), for rotation. Never stored.
 const KindUsage = "usage"
 
-// Line is one thing a turn produced: a store.Desk* kind, KindPartial or KindUsage.
+// KindStats is the turn's tokens and context, once, at the end of its output: a
+// store.Usage as JSON, without its cost, which the turn's cost line carries. Never stored
+// as an event.
+const KindStats = "stats"
+
+// Line is one thing a turn produced: a store.Desk* kind, KindPartial, KindUsage or
+// KindStats.
 type Line struct {
 	Kind string
 	Text string
@@ -150,7 +156,7 @@ func (c Claude) Turn(ctx context.Context, s Spec, emit func(Line)) error {
 		pw.Close()
 		waited <- err
 	}()
-	got := Parse(pr, emit)
+	got := parse(pr, emit, s.New)
 	pr.Close()
 	if err := <-waited; err != nil {
 		if ctx.Err() != nil {
@@ -169,11 +175,25 @@ func (c Claude) Turn(ctx context.Context, s Spec, emit func(Line)) error {
 // Parse reads Claude Code's stream-json and emits lines: the reply as it streams and
 // then whole, a short line per tool call, the session's cost so far, and an error when
 // the turn fails. It reports whether any reply came through.
-func Parse(r io.Reader, emit func(Line)) bool {
+func Parse(r io.Reader, emit func(Line)) bool { return parse(r, emit, false) }
+
+// parse is Parse; fresh says the session began with this turn, which lets the result's
+// own token totals stand (see dispatch.ClaudeUsage). Before returning it emits the turn's
+// tokens and context as one KindStats line.
+func parse(r io.Reader, emit func(Line), fresh bool) bool {
+	usage := dispatch.NewClaudeUsage(fresh)
+	defer func() {
+		if u := usage.Usage(); u.Measured() || u.Model != "" {
+			if b, err := json.Marshal(u); err == nil {
+				emit(Line{Kind: KindStats, Text: string(b)})
+			}
+		}
+	}()
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, 64*1024), 16<<20)
 	got := false
 	for sc.Scan() {
+		usage.Feed(sc.Text())
 		var m struct {
 			Type    string  `json:"type"`
 			Subtype string  `json:"subtype"`

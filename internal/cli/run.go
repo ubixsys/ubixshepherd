@@ -173,6 +173,13 @@ func printRun(env Env, r api.RunView) {
 		}
 		fmt.Fprintf(w, "  cost      %s\n", cost)
 	}
+	if u := r.Usage; u != nil {
+		if u.Measured() {
+			fmt.Fprintf(w, "  usage     %s\n", u.Line())
+		} else {
+			fmt.Fprintf(w, "  usage     %s reported no token counts\n", r.Agent)
+		}
+	}
 	if r.State != store.RunRunning {
 		fmt.Fprintf(w, "  commits   %d", r.Commits)
 		if r.Commits > 0 {
