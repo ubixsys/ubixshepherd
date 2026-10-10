@@ -1,6 +1,8 @@
 // The daemon's HTTP API, by relative URL so the app works unchanged wherever the daemon
 // serves it. Authentication is the server's business: the dev proxy adds the token, and
-// the daemon will when it serves the app. Nothing here ever holds a token.
+// when the daemon serves the app the browser holds a session cookie (from the link
+// `shepherd web` opens). Nothing here ever holds a token. A cookie session's writes carry
+// its CSRF token, read once from /v1/web/session.
 import type {
   Decision, DecisionView, Feed, LaneView, RequestView, RunEvents, RunLog, RunView, SpendToday, Status,
 } from './types'
@@ -13,11 +15,35 @@ export class ApiError extends Error {
   }
 }
 
+export const CSRF_HEADER = 'X-Shepherd-CSRF'
+
+let csrf: Promise<string> | null = null
+
+/** The session's CSRF token: "" through the dev proxy, which uses a token instead. */
+function csrfToken(): Promise<string> {
+  csrf ??= call<{ csrf?: string }>('/v1/web/session').then(
+    (s) => s.csrf ?? '',
+    () => {
+      csrf = null
+      return ''
+    },
+  )
+  return csrf
+}
+
 async function call<T>(path: string, init?: RequestInit): Promise<T> {
+  const write = init?.method !== undefined && init.method !== 'GET'
+  const token = write ? await csrfToken() : ''
   const res = await fetch(path, {
     ...init,
-    headers: { Accept: 'application/json', ...(init?.body ? { 'Content-Type': 'application/json' } : {}) },
+    headers: {
+      Accept: 'application/json',
+      ...(init?.body ? { 'Content-Type': 'application/json' } : {}),
+      ...(token ? { [CSRF_HEADER]: token } : {}),
+    },
   })
+  // A session that ended (signed out, expired, a daemon restart) has a new token next time.
+  if (res.status === 401 || res.status === 403) csrf = null
   if (!res.ok) {
     let msg = `${res.status} ${res.statusText}`
     try {
