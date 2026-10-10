@@ -20,6 +20,7 @@ that needs judgment.
    opencode:
      # bin: /opt/opencode/bin/opencode
      endpoint: http://localhost:11434/v1   # any OpenAI-compatible host
+     # idle_timeout: 10m                   # stop a run that prints nothing this long
    defaults:
      agent:
        model: {opencode: "local/qwen3-coder:30b"}
@@ -39,10 +40,10 @@ A config change applies to the next run; no daemon restart is needed.
 - **The prompt is on standard input**, never on the command line. `opencode run` reads
   the message from standard input when it has no message argument.
 - **The run's config travels in `OPENCODE_CONFIG_CONTENT`.** OpenCode has no config-path
-  flag. Shepherd writes nothing to the worktree and nothing to your home. The daemon sets
-  the variable in its own environment immediately before it starts each opencode run, so
-  the variable stays set there; only another opencode run reads it. Your own OpenCode
-  config and the repo's `opencode.json` still load underneath it.
+  flag. Shepherd writes nothing to the worktree and nothing to your home, and the
+  variable is in that run's environment alone: it is not set in the daemon and no other
+  agent sees it. Your own OpenCode config and the repo's `opencode.json` still load
+  underneath it.
 - **Permissions** are explicit, and `--auto` is not used. Files may be edited. Shell
   commands are denied except `go test`, `go build`, `go vet`, `gofmt`, `git diff`,
   `git status`, `git log`, `git show`, `git add`, `git commit`, `ls`, `cat` and the repo's
@@ -68,14 +69,17 @@ resumed one too. The version is printed at the end of each run's log.
 
 These come from the model and from OpenCode, and Shepherd does not hide them:
 
-- **Exit 0 with no change.** The model sometimes prints a tool call as plain text and
-  ends the turn, or finishes without editing. OpenCode exits 0 either way. The run log
-  then ends with a `WARNING` line, and the run shows 0 commits. The runner itself still
-  records such a run as succeeded: treat 0 commits as "nothing happened".
-- **Hangs.** The model sometimes calls a tool that does not exist, and the run can hang.
-  The provider is given a request timeout and a stream timeout, which bound a host that
-  stops answering, but not a stall inside OpenCode. Stop the run with
-  `shepherd run stop <id>`. A wall-clock limit per run needs support in the runner.
+- **Exit 0 with no change is a failure.** The model sometimes prints a tool call as plain
+  text and ends the turn, or finishes without editing, and OpenCode exits 0 either way.
+  A run that exits 0 with no commit, no file changed in the worktree, and nothing asked
+  or reported through Shepherd's tools is recorded `failed` ("opencode exited 0 but
+  changed nothing"), so it shows in your thread as a failed run and is never shipped.
+  The run log says whether the model printed a tool call as text. Uncommitted edits
+  count as a change.
+- **Hangs.** The model sometimes calls a tool that does not exist, and the run can stall.
+  A run that prints nothing for `opencode.idle_timeout` (default 10 minutes, at least
+  1 minute, or `off`) is stopped and recorded `failed` ("hung: printed nothing for ...").
+  Any output resets the clock. The provider also has a request and a stream timeout.
 - **Tool names.** Shepherd's worker tools reach the model as `shepherd_ask_human`,
   `shepherd_ask_shepherd` and `shepherd_report`; a small model sometimes calls them by
   the short names in the brief and is told the tool is unavailable.
