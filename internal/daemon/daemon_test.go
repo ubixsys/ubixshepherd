@@ -17,6 +17,7 @@ import (
 
 	"github.com/ubixsys/ubixshepherd/internal/api"
 	"github.com/ubixsys/ubixshepherd/internal/config"
+	"github.com/ubixsys/ubixshepherd/internal/convo"
 	"github.com/ubixsys/ubixshepherd/internal/desk"
 	"github.com/ubixsys/ubixshepherd/internal/paths"
 	"github.com/ubixsys/ubixshepherd/internal/store"
@@ -490,5 +491,46 @@ func TestDeskModelSetting(t *testing.T) {
 	}
 	if code := call(t, ts, s.Token, "GET", api.PathSettings+"/desk.nope", nil, nil); code != http.StatusNotFound {
 		t.Errorf("unknown key: %d", code)
+	}
+}
+
+// A lane's conversation is the person's: the operator token and a browser session read
+// it, and neither a worker's token nor the front desk's does.
+func TestLaneConversationRoute(t *testing.T) {
+	s, base, _ := webDaemon(t)
+	a, _, la, _ := twoRuns(t, s)
+	path := api.PathLaneConversation(la.ID)
+
+	var th convo.Thread
+	if code := operatorCall(t, s, base, "GET", path, &th); code != http.StatusOK {
+		t.Fatalf("operator: %d", code)
+	}
+	// The run recorded no session, so its boundary says there is no transcript.
+	if len(th.Items) != 1 || th.Items[0].Kind != convo.KindRun || th.Items[0].Run != a.ID || th.Items[0].Note == "" {
+		t.Errorf("thread = %+v", th)
+	}
+
+	b := newBrowser(t, base)
+	signIn(t, s, b)
+	if resp, body := b.do("GET", path, nil); resp.StatusCode != http.StatusOK || !strings.Contains(body, `"kind":"run"`) {
+		t.Errorf("browser session: %d %s", resp.StatusCode, body)
+	}
+
+	worker, _ := s.MintWorker(a.ID)
+	deskTok, _ := s.MintDesk(true, "")
+	for name, tok := range map[string]string{"worker": worker, "desk": deskTok} {
+		req, _ := http.NewRequest("GET", base+path, nil)
+		req.Header.Set("Authorization", "Bearer "+tok)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusForbidden {
+			t.Errorf("%s token: %d, want 403", name, resp.StatusCode)
+		}
+	}
+	if code := operatorCall(t, s, base, "GET", api.PathLanes+"/999/conversation", nil); code != http.StatusNotFound {
+		t.Errorf("unknown lane: %d", code)
 	}
 }
