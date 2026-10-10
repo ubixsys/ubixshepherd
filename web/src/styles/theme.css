@@ -7,14 +7,16 @@
   --field: #eef1f3;      /* page */
   --sheet: #f8fafb;      /* raised: the bar, open panels */
   --ink: #1e2832;        /* text */
-  --muted: #5d6a75;      /* secondary text */
-  --faint: #8b97a1;      /* tertiary: rules' labels, timestamps */
+  --muted: #4a5762;      /* secondary text */
+  --faint: #5b6872;      /* tertiary: ages, labels, timestamps; 4.5:1 on every surface */
   --rule: #d6dde2;       /* hairlines */
-  --rule-strong: #b9c3ca;
+  --control-border: #7a868f; /* edges of inputs, options and buttons; 3:1 on every surface */
+  --rule-strong: var(--control-border); /* chat.css still reads this one for its controls */
   --hover: #e3e8ec;
 
   --lichen: #3e6e5c;     /* accent: working, links, focus */
-  --lantern: #9a6200;    /* needs you */
+  --lantern: #9a6200;    /* needs you: fills, bands, borders */
+  --lantern-ink: #845300; /* needs you, as text: 4.5:1 on the wash */
   --lantern-wash: #f7ead2;
   --broken: #b42318;     /* failed */
   --broken-wash: #f8e1de;
@@ -23,32 +25,60 @@
   --font-ui: "Avenir Next", "Segoe UI Variable Text", "Segoe UI", "Noto Sans", "Helvetica Neue", system-ui, sans-serif;
   --font-mono: "Berkeley Mono", "JetBrains Mono", "SF Mono", "Cascadia Mono", ui-monospace, Menlo, Consolas, monospace;
 
-  /* A modular scale on 13px: dense, but readable for a day. */
-  --t-xs: 11.5px;
-  --t-sm: 12.5px;
-  --t-md: 13.5px;
-  --t-lg: 16px;
-  --t-xl: 21px;
+  /* Size. The root size is the one knob: 15px at 1440 wide, rising to 18px by about 2400,
+     so every rem below, and the rows and gaps built from them, grow with the display. */
+  --root-min: 15px;
+  --root-max: 18px;
 
-  --row: 30px;           /* a board row */
-  --gutter: 28px;        /* the glyph rail */
-  --pad: 16px;
+  /* Type scale: nothing is set below --t-xs. */
+  --t-2xs: 0.75rem;
+  --t-xs: 0.8125rem;
+  --t-sm: 0.875rem;
+  --t-md: 1rem;
+  --t-lg: 1.1875rem;
+  --t-xl: 1.5rem;
+
+  /* Spacing. */
+  --s-1: 0.25rem;
+  --s-2: 0.5rem;
+  --s-3: 0.75rem;
+  --s-4: 1rem;
+  --s-5: 1.5rem;
+  --s-6: 2.5rem;
+
+  --row: 2.25rem;        /* a board row */
+  --gutter: 2rem;        /* the glyph rail */
+  --pad: 1rem;
+  --bar-h: 2.75rem;
   --radius: 3px;
+
+  /* The shell: the bar, the banner and every page share one centred box. The widths of
+     what sits in it are tokens too: change one here and every page follows. */
+  --shell-max: 112rem;   /* the box; the window is wider than this on a very large display */
+  --measure-table: 96rem; /* the board */
+  --measure-page: 68rem; /* lane, log, decisions, chat */
+  --measure-read: 76ch;  /* a line of prose: messages, decisions, answered lists */
+  --rail: 20rem;         /* the lane's facts column; the live rail's width later */
+  --page-margin-left: 0; /* 0 keeps pages on the shell's left edge; auto centres them */
+  --shell-edge: max(0px, calc((100% - var(--shell-max)) / 2));
 }
+
+html { font-size: clamp(var(--root-min), 0.65625rem + 0.3125vw, var(--root-max)); }
 
 @media (prefers-color-scheme: dark) {
   :root {
     --field: #161c22;
     --sheet: #1c242b;
     --ink: #d6dce1;
-    --muted: #8fa0ad;
-    --faint: #66737e;
+    --muted: #a3b2bd;
+    --faint: #8a9aa7;
     --rule: #2a343d;
-    --rule-strong: #3a4651;
+    --control-border: #6f7f8b;
     --hover: #222c34;
 
     --lichen: #86bba2;
     --lantern: #e3aa4f;
+    --lantern-ink: #e3aa4f;
     --lantern-wash: #2e2617;
     --broken: #f07d70;
     --broken-wash: #33201e;
@@ -59,7 +89,7 @@
 /* Tones: one per meaning, shared by glyphs, badges and counts. */
 .tone-muted { color: var(--muted); }
 .tone-accent { color: var(--lichen); }
-.tone-warn { color: var(--lantern); }
+.tone-warn { color: var(--lantern-ink); }
 .tone-ok { color: var(--ok); }
 .tone-bad { color: var(--broken); }
 .tone-broken { color: var(--broken); }
@@ -78,7 +108,7 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-a { color: inherit; text-decoration-color: var(--rule-strong); text-underline-offset: 2px; }
+a { color: inherit; text-decoration-color: var(--control-border); text-underline-offset: 0.15em; }
 a:hover { text-decoration-color: currentColor; }
 
 :focus-visible {
@@ -94,8 +124,8 @@ code, kbd, .mono { font-family: var(--font-mono); font-size: 0.92em; }
 kbd {
   display: inline-block;
   min-width: 1.5em;
-  padding: 0 4px;
-  border: 1px solid var(--rule-strong);
+  padding: 0 var(--s-1);
+  border: 1px solid var(--control-border);
   border-bottom-width: 2px;
   border-radius: var(--radius);
   text-align: center;
