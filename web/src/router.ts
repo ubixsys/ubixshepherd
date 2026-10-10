@@ -4,6 +4,7 @@ import { useSyncExternalStore } from 'react'
 export type Route =
   | { page: 'board' }
   | { page: 'decisions'; focus?: number }
+  | { page: 'chat' }
   | { page: 'lane'; id: number }
   | { page: 'log'; run: number }
   | { page: 'missing'; path: string }
@@ -15,6 +16,7 @@ export function parse(hash: string): Route {
     const d = Number(new URLSearchParams(query).get('d'))
     return d > 0 ? { page: 'decisions', focus: d } : { page: 'decisions' }
   }
+  if (path === '/chat') return { page: 'chat' }
   let m = /^\/lanes\/(\d+)$/.exec(path)
   if (m) return { page: 'lane', id: Number(m[1]) }
   m = /^\/runs\/(\d+)\/log$/.exec(path)
@@ -25,6 +27,7 @@ export function parse(hash: string): Route {
 export const href = {
   board: () => '#/',
   decisions: (focus?: number) => (focus ? `#/decisions?d=${focus}` : '#/decisions'),
+  chat: () => '#/chat',
   lane: (id: number) => `#/lanes/${id}`,
   log: (run: number) => `#/runs/${run}/log`,
 }

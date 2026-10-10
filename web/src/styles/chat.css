@@ -1,0 +1,65 @@
+/* The chat page: the front desk's thread on the same glyph rail as the board, a composer
+   pinned under it. Styles come from this file only (the daemon's CSP allows no inline). */
+
+.chat { display: flex; flex-direction: column; min-height: calc(100vh - 44px - 60px); }
+.chat-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin-bottom: 8px; }
+.chat-conn { margin: 0; font-size: var(--t-sm); }
+.chat-ws { display: flex; align-items: center; gap: 6px; font-size: var(--t-sm); }
+.chat-ws select { font: inherit; color: inherit; background: var(--sheet); border: 1px solid var(--rule-strong); border-radius: var(--radius); padding: 2px 6px; }
+.chat-tools { margin-left: auto; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; font-size: var(--t-sm); }
+.chat-confirm { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.chat-earlier { padding-left: var(--gutter); margin: 0 0 8px; }
+.chat-problem { margin: 0 0 8px; padding: 6px 10px; background: var(--broken-wash); border-radius: var(--radius); font-size: var(--t-sm); }
+.chat-notice { margin: 0 0 6px; font-size: var(--t-sm); }
+
+.thread { flex: 1; padding-bottom: 16px; }
+.thread-empty { padding-left: var(--gutter); }
+
+.msg { max-width: 76ch; margin: 10px 0; padding: 8px 12px 8px calc(var(--gutter) + 8px); border-left: 2px solid transparent; overflow-wrap: anywhere; }
+.msg-user { border-left-color: var(--lantern); background: var(--lantern-wash); border-radius: 0 var(--radius) var(--radius) 0; }
+.msg-assistant { border-left-color: var(--lichen); }
+.msg-assistant.is-partial { opacity: 0.85; }
+.msg-who { display: block; font-size: var(--t-xs); font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.msg-text { margin: 2px 0 0; white-space: pre-wrap; }
+
+.md > :first-child { margin-top: 2px; }
+.md p, .md ul, .md ol, .md pre { margin: 6px 0; }
+.md p { white-space: pre-wrap; }
+.md-h { font-weight: 600; }
+.md ul, .md ol { padding-left: 1.4em; }
+.md pre { padding: 8px 10px; background: var(--sheet); border: 1px solid var(--rule); border-radius: var(--radius); overflow-x: auto; }
+.md code { font-size: 0.92em; }
+.md :not(pre) > code { padding: 0 3px; background: var(--hover); border-radius: var(--radius); }
+.md a { color: var(--lichen); }
+
+/* Typed event rows: compact, one line, between messages. */
+.trow { display: flex; align-items: baseline; gap: 0; margin: 2px 0; max-width: 76ch; font-size: var(--t-sm); color: var(--muted); overflow-wrap: anywhere; }
+.trow > .glyph { text-align: center; }
+.trow-body { flex: 1; min-width: 0; }
+.trow-line { margin: 0; }
+.trow-age { font-size: var(--t-xs); margin-left: 6px; }
+.trow-tool .mono { color: var(--faint); }
+.trow-system { display: block; }
+.trow-system summary { cursor: pointer; }
+.trow-system .msg-text { padding-left: var(--gutter); }
+.trow-decision { display: flex; margin: 8px 0; color: var(--ink); }
+.decision-inline { padding: 8px 0; border-top: 0; max-width: none; }
+.decision-inline .decision-q { font-size: var(--t-md); }
+
+.composer {
+  position: sticky; bottom: 0; z-index: 2;
+  padding: 10px 0 12px; background: var(--field); border-top: 1px solid var(--rule);
+}
+.composer textarea {
+  display: block; width: 100%; resize: vertical; min-height: 3.2em; max-height: 40vh;
+  padding: 8px 10px; font: inherit; color: inherit;
+  background: var(--sheet); border: 1px solid var(--rule-strong); border-radius: var(--radius);
+}
+.composer textarea:disabled { opacity: 0.6; }
+.composer-bar { display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px; }
+
+@media (max-width: 760px) {
+  .chat-tools { margin-left: 0; }
+  .msg { padding-left: 10px; }
+  .trow-system .msg-text { padding-left: 0; }
+}
