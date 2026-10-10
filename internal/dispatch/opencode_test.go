@@ -264,10 +264,14 @@ func TestOpenCodeConfigPermissions(t *testing.T) {
 	if !strings.HasPrefix(bash, `{"*":"deny","go test*":"allow"`) || !strings.HasSuffix(bash, `"git push*":"deny"}`) {
 		t.Errorf("bash rules: %s", bash)
 	}
-	for _, want := range []string{`"make check*":"allow"`, `"git commit*":"allow"`, `"cat *":"allow"`} {
+	for _, want := range []string{`"make check*":"allow"`, `"git commit*":"allow"`, `"cat *":"allow"`, `"git fetch*":"allow"`, `"git rebase origin/*":"allow"`, `"git merge-base*":"allow"`, `"git rev-parse*":"allow"`} {
 		if !strings.Contains(bash, want) {
 			t.Errorf("bash rules lack %s: %s", want, bash)
 		}
+	}
+	// Check that interactive rebases are explicitly denied
+	if !strings.Contains(bash, `"git rebase -i*":"deny"`) || !strings.Contains(bash, `"git rebase --interactive*":"deny"`) {
+		t.Errorf("bash rules missing explicit deny for interactive rebase: %s", bash)
 	}
 	p := cfg.Provider["bench"]
 	if p.NPM != "@ai-sdk/openai-compatible" || p.Options.BaseURL != "http://localhost:11434/v1" || p.Models["qwen3-coder:30b"] == nil {

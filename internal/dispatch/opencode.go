@@ -225,7 +225,7 @@ func (o obj) MarshalJSON() ([]byte, error) {
 func openCodeConfig(o Opts, s config.OpenCode) string {
 	bash := obj{{"*", "deny"}}
 	allow := []string{"go test*", "go build*", "go vet*", "gofmt*", "git diff*", "git status*",
-		"git log*", "git show*", "git add*", "git commit*", "ls*", "cat *"}
+		"git log*", "git show*", "git add*", "git commit*", "ls*", "cat *", "git fetch*", "git rebase origin/*", "git merge-base*", "git rev-parse*"}
 	if g := strings.TrimSpace(o.Gate); g != "" {
 		allow = append(allow, g+"*")
 	}
@@ -235,6 +235,9 @@ func openCodeConfig(o Opts, s config.OpenCode) string {
 	for _, p := range allow {
 		bash = append(bash, kv{p, "allow"})
 	}
+	// Explicitly deny interactive rebases to prevent hangs
+	bash = append(bash, kv{"git rebase -i*", "deny"})
+	bash = append(bash, kv{"git rebase --interactive*", "deny"})
 	if o.Push {
 		bash = append(bash, kv{"git push*", "allow"})
 	} else {
