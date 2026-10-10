@@ -1,0 +1,3 @@
+# The built web UI, copied here from web/dist by `make web`. Only this file is tracked.
+*
+!.gitignore
