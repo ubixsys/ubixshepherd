@@ -1,8 +1,11 @@
 # Projects: groups of repos with a shared brief, budget and front door
 
-**Status:** Proposed. Nothing here is built or decided; it is a design to argue with. It adds
-one concept above the repo and below the workspace, and reuses what exists: repo profiles,
-`follows`, routed requests and decisions.
+**Status:** Proposed. Nothing here is built. The maintainer approved the design on
+2026-10-10 as the basis for the [implementation plan](#implementation-plan); the
+[open questions](#open-questions) stay open until the maintainer decides them, and the plan
+says which must be settled before which phase. It adds one concept above the repo and
+below the workspace, and reuses what exists: repo profiles, `follows`, routed requests and
+decisions.
 
 ## Why
 
@@ -305,3 +308,154 @@ nothing in it names a product.
 9. **Vocabulary.** "Project" already appears loosely in design.md; if accepted, it
    needs a row in [naming.md](naming.md) and a numbered entry in
    [open-questions.md](open-questions.md). This document does not edit either.
+
+## Implementation plan
+
+Plan-first: this section is the plan, and no phase starts until the maintainer confirms
+it. Each phase is one lane and one merge request that `make check` gates, small enough to
+review alone and ordered so that every merge leaves a working Shepherd (a project with
+nothing configured behaves as the workspace does today). Paths are the lane's scope.
+
+### Assumptions to confirm first
+
+The phases use the proposed answers to these [open questions](#open-questions). Questions
+1, 2 and 4 must be decided before phase 1; 3 before phase 6; 5 and 6 can wait for their
+phases; 7 and 8 before phase 5.
+
+| Open question | Assumed in the plan |
+|---|---|
+| 1. A repo in two projects | No: one project per repo, validated. |
+| 2. Workspace budget | Its own ceiling; projects draw under it. |
+| 4. Who lists membership | The project lists its repos. |
+
+### Phases
+
+| # | Lane (suggested) | Scope | Depends on | Waits for open lanes |
+|---|---|---|---|---|
+| 1 | `feat/project-config` | `internal/config/**` | decisions 1, 2, 4 | **`feat/desk-rotation`** (holds `internal/config/**`) |
+| 2 | `feat/project-store` | `internal/store/**` | none | none |
+| 3 | `feat/project-spend` | `internal/dispatch/budget*.go`, `internal/store/**` | 1, 2 | `feat/desk-rotation`, through 1 |
+| 4 | `feat/project-brief` | `internal/dispatch/runner.go`, `internal/dispatch/adapters.go`, `internal/api/**`, `internal/client/**`, `internal/store/**` | 1, 2 | `feat/desk-rotation`, through 1 |
+| 5 | `feat/project-intake` | `internal/dispatch/route.go`, `internal/dispatch/runner.go`, `internal/api/**`, `internal/client/**`, `internal/cli/decision.go`, `internal/store/**` | 1, 2, 3 | `feat/desk-rotation`, through 1 |
+| 6 | `feat/project-surfaces` | `internal/cli/project.go`, `internal/cli/mcp.go`, `internal/desk/**`, `internal/chat/**`, `internal/daemon/desk.go`, `internal/webui/**`, `web/src/**`, `docs/desk.md` | 3, 4, 5, decision 3 | **`feat/desk-rotation`** (holds `internal/desk/**`, `internal/daemon/desk.go`, `internal/cli/mcp.go`, `docs/desk.md`) |
+
+Phase 2 can start now. Phases 1 and 6 are the ones the open `feat/desk-rotation` lane
+blocks directly, and the rest inherit that through phase 1, since each needs the config
+types. `fix/prepush-merge-base` (holds `internal/fold/hook*.go` and `internal/cli/hook*.go`)
+overlaps none of them: no phase edits the hook or the fold. Phase 5 opens a lane through
+the existing `Fold` calls and leaves the hook alone; if testing it shows the hook's scope
+check must change, that change waits for `fix/prepush-merge-base` to land and goes in its
+own lane.
+
+Where a phase wants a file another lane holds, the plan moves it rather than asking for
+the lease. Two moves are deliberate: the desk's brief injection (`internal/desk/claude.go`,
+`internal/chat/desk.go`) and the MCP mapping (`internal/cli/mcp.go`) are in phase 6 and
+not earlier, so phases 3 to 5 do not queue behind the desk lane's files.
+
+### Phase 1: config
+
+- **Adds:** a `projects` map in `Config` (`repos`, `brief_max_age`, `budget` with `amount`,
+  `period`, `hold`, `intake` rules as in the sketch); defaults (budget from
+  `daemon.budget`, `period: day`, `hold: automatic`, `brief_max_age: 30d`); validation:
+  members exist in `repos`, a repo is in at most one project, `hold` and `decide` values
+  are in their sets, an intake rule names a known project or `*`, durations parse, amounts
+  are not negative. Merge and reload on SIGHUP as the rest of config does. Extends
+  `template.yaml`.
+- **Tests:** table tests in the style of `config_test.go` for each rejection above and each
+  default; reload picks up a changed project; `template_test.go` still parses the template.
+- **Gate:** `make check`.
+
+### Phase 2: store and migration
+
+- **Adds:** appended migrations only: `project_briefs` (project, text, state of draft or
+  approved or superseded, drafted_by, approved_by, created_at, approved_at); a project
+  column on `requests` and the typed fields (`kind` values, `evidence`, `touches`,
+  `version`, `from_project`) as nullable columns so old rows read unchanged; a project
+  column or lookup the spend rollup can use, kept in the store interface as methods, not
+  as SQL elsewhere.
+- **Tests:** `sqlite_test.go` migrates a database at the previous version and reads old
+  requests and spend unchanged; one brief is approved at a time and an approval supersedes
+  the last; a draft cannot be approved by the run that drafted it.
+- **Gate:** `make check`.
+
+### Phase 3: spend rollup and hold
+
+- **Adds:** a per-project spend total per period (day or month) summed from run costs by
+  repo membership; `hold: warn | automatic | all` in the existing budget check, with the
+  warning at 80% and the held-run message naming the budget and what lifts it; the
+  workspace figure stays the ceiling and holds first when lower. `Spent` and `overBudget`
+  keep their signatures for repos outside any project.
+- **Tests:** extends `budget_test.go`: a project over its cap holds Shepherd-started runs
+  and not a person's (`automatic`), holds both (`all`), holds neither (`warn`); a repo
+  outside any project counts toward the workspace only; the workspace ceiling holds a
+  project still under its own; month rollover. Uses fake runs and the fake agent script as
+  the runner's tests do.
+- **Gate:** `make check`.
+
+### Phase 4: brief layering and age
+
+- **Adds:** the approved project brief given to every agent Shepherd starts in a member
+  repo, layered between workspace rules and the repo `brief` where
+  `internal/dispatch/runner.go` and `Brief` in `adapters.go` build the agent's text, with
+  its approval age stated in it; draft, approve and read operations on the HTTP API and
+  client (approve takes the person's words only, as `decision_answer` does); an `age` and a
+  stale flag computed from `approved_at` and `brief_max_age`. Unapproved drafts are never
+  given to an agent. The text goes through `internal/redact` like other stored agent text.
+- **Tests:** a run in a member repo gets the approved brief and not a draft; order is
+  workspace, project, repo; a repo in no project is unchanged; age and stale flag at the
+  boundary; an agent run cannot approve (the API refuses a worker's token); API round
+  trip in `api_test.go` and `client_test.go`.
+- **Gate:** `make check`.
+
+### Phase 5: cross-project requests and intake
+
+- **Adds:** a project as a request target and the `bug`, `feature` and `notice` kinds with
+  their typed fields, in `RequestHelp` and `dispatchRequest`; an intake matcher
+  (first match, no match is `hold`, matching only typed fields and sender); `auto` opens a
+  lane in the rule's repo with a scope limited to the paths `touches` allows and starts an
+  agent; `hold` becomes a decision with accept, refuse and ask-for-more options; `refuse`
+  replies at once; the consumer's pinned `version` read from its lock where the repo
+  records one, else omitted; the depth cap carried across projects and the receiving
+  project charged for the runs. `request close` keeps working on these.
+- **Tests:** in the style of `route_test.go` with a fake agent: a bug with a failing test
+  from another project opens a lane and starts a run; a feature, or anything touching
+  `public_api`, becomes a decision; an unmatched request holds; a refused one replies with
+  its reason; a request with a mislabeled `touches` cannot write outside its scope;
+  `MaxDepth` still bites across projects; the receiver's budget is charged and the
+  sender's is not; a request to a repo with no open lane is `needs_routing`.
+- **Gate:** `make check`.
+
+### Phase 6: CLI, MCP, desk, dock and web
+
+- **Adds:** `shepherd project` commands first (`list`, `show` with brief, age, spend and
+  intake, `brief draft|approve`), then the MCP tools that map onto them, and the request
+  tools' new fields; the desk's standing instruction and operator tools (`internal/desk`
+  and `DeskBrief`), including the index of project briefs and the draft-a-refresh
+  behaviour; the dock's project name, brief age and spend line; a project page and brief
+  approval in `web/`.
+- **Tests:** `mcp_test.go` for each tool mapped to its command; `chat` dock tests for the
+  new lines and for collapsing on a small terminal; `web` runs `npm run check`
+  (typecheck, lint, vitest) as its README does; the desk needs a real check by hand, as
+  CLAUDE.md says, before the lane is merged.
+- **Gate:** `make check`, and `npm run check` in `web/`.
+
+### Docs follow-up (a later docs lane)
+
+These are outside this lane's scope and are made only when the maintainer decides the
+related calls, since a decided question moves out of `open-questions.md` only by the
+maintainer:
+
+| File | Entry |
+|---|---|
+| `docs/naming.md` | A **Project** row in the family vocabulary: a named group of repos in one workspace, holding a brief, a budget and intake rules; not a directory, a pack or a product. Add "intake" if the term sticks. |
+| `docs/open-questions.md` | One numbered entry for the project concept (the approval and its date), plus one each for questions 1 to 8 above as they are decided, keeping stable numbers and linking back here. |
+| `docs/design.md` | A short §3.14 note pointing at this document; it stays **Proposed**. |
+| `docs/v1.md` and `docs/roadmap.md` | Where the project concept lands among the milestones, and the status of each phase as it merges; the end-to-end cross-repo criterion's status changes only when phase 5 and a real run prove it. |
+| `CLAUDE.md` | "Where things stand" and the Code section, once phases merge, not before. |
+| `README.md` | The "Read next" table row for this document. |
+
+### What each phase leaves alone
+
+No phase edits the Fold, the pre-push hook, the forge reader, autonomy or release
+handling. A project grants no autonomy and no phase moves a tag, a merge or a release off
+the person: those stay under the repo's own `autonomy` and tag reservations.
