@@ -1,12 +1,59 @@
 # Roadmap: the MVP, what follows, and the nice-to-haves
 
-**Status:** Proposal (2026-10-01), for the maintainer to cut and reorder. Implementation
-notes below reflect the code as of 2026-10-08; they do not change the proposed scope or
-milestones. It builds on the decided scope in [v1.md](v1.md) and comes from three pieces of research done the same day:
+**Status:** The original feature list is a proposal (2026-10-01). The status and next-work
+sequence below record the decisions made on 2026-10-09. Implementation status is checked
+against the default branch and the review branches visible on 2026-10-09. It builds on the
+decided scope in [v1.md](v1.md) and comes from three pieces of research done the same day:
 how the work runs today on uBixCore and the products built on it (coordination logs, agent
 working agreements, two months of git history), the current landscape of multi-agent
 tools, and which providers and non-LLM tools suit each kind of work. Model names and prices
 are a snapshot; the design keeps them behind aliases for that reason.
+
+## 0. Status and next work (2026-10-09)
+
+Status labels are exact: **shipped** means on the default branch, **built, in review**
+means committed on a branch but not merged, and **decided** means not started.
+
+| Work | Status | Current position |
+|---|---|---|
+| Web UI: board, lane page, decisions and run log, using polling | **shipped** | The browser client exists under `web/`; it is not served by the daemon. |
+| Minimum git 2.31 check at daemon start | **shipped** | The binary enforces the floor because older git versions silently ignore the push-block configuration. |
+| Dev-to-main release flow, required human sign-off, GitHub release publisher | **shipped** | Work lands on `dev`; green `dev` is fast-forwarded to `main`; tags on `main` publish through GitHub. |
+| Remote CLI using a named host and SSH tunnel | **built, in review** | The daemon remains loopback-only; the client reads remote runtime details over SSH and opens its tunnel. |
+| Daemon-owned front desk, workspace conversation, wake policy and event stream | **built, in review** | Clients will attach to the daemon's conversation; no client attached means it keeps a digest rather than waking the desk. |
+| Scoped operator, worker and desk tokens | **built, in review** | The desk can answer a decision only in a turn started by a person. Same-OS-user agents can still read the operator token. |
+| Terminal chat as a thin client of the daemon desk, available with `--host` | **decided** | The existing terminal chat still owns its front-desk run; moving it is next after client support. |
+| Daemon web serving, one-time sign-in link and cookie, `shepherd web`, missing API fields | **decided** | Not started. The needed fields include lane IDs on feed items, closed lanes in the list, pipeline URLs, commits per run and fix-attempt counts. |
+| OpenCode adapter, restricted to low-risk lanes | **decided** | Shepherd's own gate, not the model, decides success. |
+| Direct TCP with TLS | **decided** | A possible second transport if SSH tunnelling proves insufficient; it is off by default and would pin a generated certificate's fingerprint. |
+| Separate-account or OS-sandbox isolation for agents | **decided** | Later work; scoped tokens do not isolate processes running as the same OS user. |
+
+The first release is `v0.1.0-beta.1`. The development and release branch model is
+decided, and its sign-off, promotion and publication workflow is shipped. The supported
+git floor is 2.31 and is enforced at daemon start.
+
+### Next work, in order
+
+| Order | Work | Depends on |
+|---|---|---|
+| 1 | Merge the three finished implementation branches, then install Shepherd. | Human review and merge of the completed branches. |
+| 2 | Add a client lane: agents should prefer `SHEPHERD_URL` and `SHEPHERD_TOKEN`; the pre-push hook continues to use the operator token. Add desk and event-stream client methods. | The remote daemon and daemon desk/event-stream work being merged. |
+| 3 | Make terminal chat a thin client of the daemon's desk, and allow `chat` with `--host`. | The client lane and the daemon desk API. |
+| 4 | Serve the built web app from the daemon and add one-time sign-in with a cookie. Add `shepherd web`. | The daemon's client authentication and web-serving work. |
+| 5 | Build the web pages in this order: browser chat, lane story page, cost and quality page, config editor, desktop notifications, scope and lease map. | Daemon web serving, sign-in and the missing API fields. |
+| 6 | Add direct TLS transport only if remote-access needs remain after SSH tunnels. | Experience with the SSH-first transport and a concrete need for a second transport. |
+| 7 | Isolate agents from the operator token with a separate OS account or an OS sandbox. | A suitable platform-specific isolation mechanism; scoped tokens alone do not provide it. |
+
+### Known gaps and limits
+
+- Desk wake-ups are not per workspace, and queued desk turns do not survive a restart.
+- Copilot and Cursor adapters' handling of the run token is unverified.
+- Windows builds, but has not been tested.
+- GitHub as a lane forge is not built.
+- Workspace-wide leases, typed cross-repo work orders and triage are not built.
+- A remote client's `SIGKILL` can orphan its SSH tunnel.
+- A daemon started inside an agent run inherits that run's environment; a fix is built, in review.
+- An agent running as the daemon's OS user can read the operator token. Stronger isolation is later work.
 
 ## 1. Lessons from practice, and what they mean for Shepherd
 
@@ -95,8 +142,9 @@ below is not complete.
 - ★ **Tag proof (built)**: the tag commit contains the merge.
 - ★ **`verified-on:<env>`** with pluggable evidence: HTTP probe, failed-Jobs check, E2E run.
 
-**M4 MCP.** Built: operator and worker tool sets, plus `shepherd chat` as a terminal front
-desk over the daemon feed.
+**M4 MCP.** Shipped: operator and worker tool sets, plus `shepherd chat` as a terminal
+front desk that reads the daemon feed. The daemon-owned desk and event stream are built,
+in review. Moving terminal chat onto that desk is decided, not started.
 - ★ **Stateless tools with explicit lane and task handles**, matching where the MCP spec is
   heading; `ask` is a plain tool call now, MCP Tasks/elicitation later.
 - ★ **The decision queue** in the owner-queue shape: decisions carry options and a
@@ -137,7 +185,7 @@ Across M3 to M5:
   launched agents get `ask_shepherd`, `ask_human` and `report`; Shepherd routes between
   sessions; events continue sessions instead of the human.
 - ★ **The terminal** ([design.md §3.16](design.md#316-the-terminal-one-thread-many-feeds),
-  revised 2026-10-08): built thread in terminal scrollback, recent history on start,
+  revised 2026-10-08): shipped thread in terminal scrollback, recent history on start,
   searchable Ctrl-O transcript, markdown, typed events from a closed set, attention-sorted
   dock with counts and MR badges, in-place decision answers, and agent attach. External
   notifications and a richer board remain future work.
@@ -151,48 +199,14 @@ cross-provider review on both MRs. And one release of a non-uBixCore repo (ubixv
 replikate) goes merged → tagged → mirrored → published with Shepherd checking every step. Measured over two weeks: human messages per merged MR
 down, stale worktrees zero, tag collisions zero.
 
-## 4. Next after the MVP
+## 4. Further proposals after the decided sequence
 
-In the order the evidence suggests:
-
-1. **GitHub as a primary forge**: pull requests, reviews and branch protection, so repos
-   that live on GitHub get everything GitLab repos do. The largest audience outside uBix.
-2. **Releases and install**, so people other than the maintainer can run it. Tagged
-   releases publish binaries through the GitHub mirror with SHA-256 checksums. One layout
-   for every channel: the binary under `~/.shepherd/versions/<version>/` with a stable
-   symlink at `~/.local/bin/shepherd` (where Claude Code and other user-level tools
-   install), so an upgrade is a symlink switch and a rollback is switching it back. The
-   service manager registration (`shepherd daemon install`) points at the symlink and
-   survives upgrades. Channels: an install script for macOS and Linux and one for Windows
-   (`%LOCALAPPDATA%\Programs\shepherd`), a Homebrew tap (`brew services` for start at
-   login), and `go install`; later `shepherd update`. Also a remote CLI before full
-   hosting: the CLI talking to a daemon on another machine over an SSH tunnel, named by
-   an address setting instead of the local runtime file.
-3. **A VS Code extension**: lanes, task states and the decision queue in the sidebar,
-   "open this lane's worktree", approve a held decision in place. TypeScript, another client
-   of the HTTP API, sharing code with the web UI.
-4. **Standards pack, rendered to `AGENTS.md` first** (now the cross-vendor convention, with
-   Claude Code reported to read it when no `CLAUDE.md` exists), plus thin per-provider files
-   and the drift check. Retires the hand-copied rules, which have already drifted (ubixcore's
-   coordination template still says "branch off `dev`" after the trunk switch on 2026-09-12).
-5. **Scheduled audits**, the missing proactive cadence: a weekly security sweep (scanners →
-   triage → verify), secret scan before every tag, product-noun grep on the framework
-   boundary, failed-Jobs sweep across environments, dependency updates.
-6. **Server deployment**: Shepherd on the k3s cluster, uBixOps forwarding webhooks, the CI
-   lease check, polling as fallback.
-7. **Web UI (in progress)**: work on a React and TypeScript client for `web/`, to be served
-   by the daemon later. No `web/` sources are present in this checkout, so the UI is not
-   counted as built here. Its proposed scope remains a status board, decision queue,
-   outcome and cost dashboards.
-8. **Vault credential leasing** per task.
-9. **Playbooks**: release → ubixsys-web docs; uBixCore tag → host pin bumps; mirror-failure
-   checks.
-10. **Remaining work kinds**: optimize, security audit as a work order, migration, graphics,
-   research, each with its gate pack.
-11. **Learning loop**: outcome records propose routing and gate changes as MRs.
-12. **OpenCode and local-model adapters**: extend dispatch beyond the three current
-    adapters, then connect a local model provider where its CLI or API can be run and
-    measured through Shepherd.
+These remain proposals, not the immediate work order: GitHub as a primary lane forge;
+a VS Code extension; a standards pack rendered to `AGENTS.md`; scheduled audits; server
+deployment; Vault credential leasing; release and pin-bump playbooks; more work kinds;
+a learning loop; and additional agent adapters. The OpenCode adapter is no longer just a
+general proposal: it is decided for low-risk lanes, as recorded above and in
+[open-questions.md](open-questions.md).
 
 ## 5. Nice-to-haves
 
