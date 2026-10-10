@@ -184,6 +184,10 @@ func (s *Server) Handler() http.Handler {
 	handle("GET "+api.PathWebSession, web, s.webSessionInfo)
 	handle("POST "+api.PathWebSignout, web, s.webSignout)
 	handle("DELETE "+api.PathWebSessions, operatorOnly, s.webEndAll)
+	// Anything else under /v1 is an API 404 in JSON, never the UI's HTML.
+	mux.HandleFunc("/v1/", func(w http.ResponseWriter, r *http.Request) {
+		writeError(w, http.StatusNotFound, fmt.Errorf("no endpoint %s %s", r.Method, r.URL.Path))
+	})
 	return s.logRequests(s.browserGate(s.auth(mux)))
 }
 

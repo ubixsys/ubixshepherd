@@ -60,6 +60,9 @@ protocol) is listed under **Interface changes** in the release that makes it.
   `GET /v1/web/session` (the caller's role, and a browser session's CSRF token and
   expiry), `POST /v1/web/signout` and `DELETE /v1/web/sessions` (operator). Paths
   outside `/v1` now serve the web UI. New command: `shepherd web`.
+- An unknown path under `/v1` is answered with the API's JSON error (404), not Go's
+  plain text; a request to a known path with the wrong method is now that 404 too,
+  where it was a 405.
 - Every request must name a loopback host (`localhost`, `127.0.0.0/8`, `::1`, any port)
   in its `Host` header; anything else is answered 421, against DNS rebinding. A request
   with a token that carries an `Origin` other than the daemon's own is answered 403.

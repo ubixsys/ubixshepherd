@@ -604,3 +604,28 @@ func TestWebSessionEnds(t *testing.T) {
 		t.Errorf("expired session: %d", code)
 	}
 }
+
+// An unknown API path is the API's JSON 404, never the UI's HTML; outside /v1, the UI's
+// routes are in the fragment, so an unknown path is a plain 404 too.
+func TestWebUnknownPaths(t *testing.T) {
+	s, base, _ := webDaemon(t)
+	b := newBrowser(t, base)
+	signIn(t, s, b)
+	resp, body := b.do("GET", "/v1/nothing/here", nil)
+	var e api.Error
+	if resp.StatusCode != http.StatusNotFound || !strings.HasPrefix(resp.Header.Get("Content-Type"), "application/json") ||
+		json.Unmarshal([]byte(body), &e) != nil || e.Error == "" {
+		t.Errorf("unknown API path: %d %q %s", resp.StatusCode, resp.Header.Get("Content-Type"), body)
+	}
+	if code := operatorCall(t, s, base, "GET", "/v1/nothing", nil); code != http.StatusNotFound {
+		t.Errorf("unknown API path with the token: %d", code)
+	}
+	// Without a session, auth answers first.
+	anon := newBrowser(t, base)
+	if resp, _ := anon.do("GET", "/v1/nothing", nil); resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("unknown API path, signed out: %d", resp.StatusCode)
+	}
+	if resp, body := b.do("GET", "/lanes/1", nil); resp.StatusCode != http.StatusNotFound || strings.Contains(body, "<html") {
+		t.Errorf("unknown page path: %d %s", resp.StatusCode, body)
+	}
+}
