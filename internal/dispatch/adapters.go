@@ -48,6 +48,16 @@ type Adapter struct {
 	// WorkerReady reports whether the agent can be given Shepherd's worker tools. For
 	// CLIs configured by flag it is always true; Cursor needs a one-time setup.
 	WorkerReady func() bool
+	// Env is the environment this run's process gets beyond the daemon's own, as
+	// KEY=VALUE. It reaches that process alone: nothing is set in the daemon.
+	Env func(o Opts) []string
+	// NoChangeFails says a run that exits 0 and leaves the lane as it found it (no commit,
+	// no file changed, and nothing asked or reported through Shepherd's tools) is recorded
+	// failed, not succeeded. For agents that can end a turn without doing the work.
+	NoChangeFails bool
+	// Idle is how long a run may print nothing before it is stopped and recorded failed
+	// as hung; nil, or 0, for no limit.
+	Idle func() time.Duration
 	// Note is added to the brief: what this CLI's permissions need the agent to know.
 	Note string
 	// Read turns a line of the agent's output into the run log's line and any cost.
@@ -280,6 +290,23 @@ var adapters = map[string]Adapter{
 		SessionCost: true,
 		Limit:       limitWords(copilotLimitWords),
 	},
+	"opencode": {
+		Name: "opencode", Bin: "opencode",
+		// The prompt is standard input; the config is in the environment (see opencode.go).
+		Args:        openCodeArgs,
+		WorkerReady: always,
+		// OpenCode names the session itself and every JSON event carries its id.
+		NewSession: func(context.Context, string, string) (string, error) { return "", nil },
+		SessionIn:  openCodeSession,
+		// opencode -s opens its TUI on the session, in the lane's worktree.
+		Attach: func(session, _ string) []string { return []string{"-s", session} },
+		Note:   "You run on a small local model, so keep to small mechanical edits. Make one tool call at a time through the tool interface, never write a tool call out as text. Shepherd's tools are named shepherd_ask_human, shepherd_ask_shepherd and shepherd_report. Commit with `git add` then `git commit`. Do not write tests in a typed codebase: stop and say so instead.",
+		Read:   openCodeOutput,
+		// The run's config goes in the run's environment alone (see opencode.go).
+		Env:           openCodeRunEnv,
+		NoChangeFails: true,
+		Idle:          func() time.Duration { return openCodeIdle() },
+	},
 	"cursor": {
 		Name: "cursor", Bin: "cursor-agent",
 		Args: func(o Opts) []string {
@@ -342,6 +369,9 @@ func AdapterFor(name string) (Adapter, error) {
 	a, ok := adapters[name]
 	if !ok {
 		return a, fmt.Errorf("unknown agent %q; Shepherd knows %s", name, strings.Join(AgentNames(), ", "))
+	}
+	if name == "opencode" {
+		return openCodeFor(a)
 	}
 	return a, nil
 }

@@ -14,6 +14,7 @@ import (
 	"io"
 	"maps"
 	"net"
+	"net/url"
 	"os"
 	"regexp"
 	"slices"
@@ -27,6 +28,7 @@ import (
 type Config struct {
 	Daemon   Daemon             `yaml:"daemon" json:"daemon"`
 	Desk     Desk               `yaml:"desk" json:"desk"`
+	OpenCode OpenCode           `yaml:"opencode" json:"opencode,omitempty"`
 	Defaults Profile            `yaml:"defaults" json:"defaults"`
 	Repos    map[string]Profile `yaml:"repos" json:"repos,omitempty"`
 }
@@ -47,6 +49,43 @@ type Daemon struct {
 	CreditUSD *float64 `yaml:"credit_usd" json:"credit_usd"`
 	// LogLevel is what the daemon logs: debug, info, warn or error (one of LogLevels).
 	LogLevel string `yaml:"log_level" json:"log_level"`
+}
+
+// OpenCode says where the OpenCode CLI is and which model host it talks to. It is a
+// machine setting, not a repo's: the binary and the host are properties of this machine.
+type OpenCode struct {
+	// Bin is the opencode executable; "" looks for opencode on PATH, then in
+	// ~/.opencode/bin (where its standalone installer puts it).
+	Bin string `yaml:"bin" json:"bin,omitempty"`
+	// Endpoint is the base URL of an OpenAI-compatible model host (an Ollama's
+	// http://localhost:11434/v1). When set, Shepherd defines a provider for each run
+	// from it and the run's model, named <provider>/<model> in agent.model.opencode;
+	// a model without a provider is run under the provider "local". "" leaves the
+	// provider to the person's own OpenCode configuration.
+	Endpoint string `yaml:"endpoint" json:"endpoint,omitempty"`
+	// IdleTimeout is how long a run may print nothing before Shepherd stops it and
+	// records it failed as hung: a duration of at least a minute, or "off". "" is
+	// DefaultOpenCodeIdle. Any output resets it.
+	IdleTimeout string `yaml:"idle_timeout" json:"idle_timeout,omitempty"`
+}
+
+// DefaultOpenCodeIdle is OpenCode's idle limit when none is configured: generous,
+// since a local model can take minutes over one step.
+const DefaultOpenCodeIdle = 10 * time.Minute
+
+// Idle is IdleTimeout as a duration; 0 means no limit.
+func (o OpenCode) Idle() time.Duration {
+	switch o.IdleTimeout {
+	case "":
+		return DefaultOpenCodeIdle
+	case "off":
+		return 0
+	}
+	d, err := time.ParseDuration(o.IdleTimeout)
+	if err != nil || d < time.Minute {
+		return DefaultOpenCodeIdle
+	}
+	return d
 }
 
 // Desk holds the front desk's settings: the daemon's, and shepherd chat's own.
@@ -81,7 +120,7 @@ func (d Desk) WakeMode() string {
 }
 
 // Agents are the agent CLIs Shepherd can start.
-var Agents = []string{"claude", "copilot", "cursor"}
+var Agents = []string{"claude", "copilot", "cursor", "opencode"}
 
 // LogLevels are daemon.log_level's choices, quietest last.
 var LogLevels = []string{"debug", "info", "warn", "error"}
@@ -180,7 +219,7 @@ type Follow struct {
 	// Lane names the lane; "chore/{repo}-{version}" by default.
 	Lane  string   `yaml:"lane,omitempty" json:"lane,omitempty"`
 	Scope []string `yaml:"scope" json:"scope"`
-	// Agent does the work: claude (the default), copilot or cursor.
+	// Agent does the work: claude (the default), copilot, cursor or opencode.
 	Agent string `yaml:"agent,omitempty" json:"agent,omitempty"`
 	Model string `yaml:"model,omitempty" json:"model,omitempty"`
 	// Task is what the agent is asked to do.
@@ -211,7 +250,7 @@ type AgentOpts struct {
 	// as allowing every tool; Cursor always runs with --force.
 	PermissionMode string `yaml:"permission_mode,omitempty" json:"permission_mode,omitempty"`
 	// Model is the model each agent runs on when lane run names none, by agent
-	// (claude, copilot, cursor); an agent left out uses its CLI's own default. A repo's
+	// (claude, copilot, cursor, opencode); an agent left out uses its CLI's own default. A repo's
 	// entries replace the defaults' for the same agent.
 	Model map[string]string `yaml:"model,omitempty" json:"model,omitempty"`
 }
@@ -299,6 +338,7 @@ func Parse(b []byte) (Config, error) {
 		c.Daemon.LogLevel = file.Daemon.LogLevel
 	}
 	c.Desk = file.Desk
+	c.OpenCode = file.OpenCode
 	c.Defaults = merge(c.Defaults, file.Defaults)
 	c.Repos = file.Repos
 	return c, c.Validate()
@@ -330,6 +370,19 @@ func (c Config) Validate() error {
 	}
 	if badModel(c.Desk.Model) {
 		errs = append(errs, fmt.Errorf("desk.model: %q is not a model name", c.Desk.Model))
+	}
+	if b := c.OpenCode.Bin; b != strings.TrimSpace(b) {
+		errs = append(errs, fmt.Errorf("opencode.bin: %q has blanks around it", b))
+	}
+	if t := c.OpenCode.IdleTimeout; t != "" && t != "off" {
+		if d, err := time.ParseDuration(t); err != nil || d < time.Minute {
+			errs = append(errs, fmt.Errorf("opencode.idle_timeout: %q; a duration of at least 1m, or off", t))
+		}
+	}
+	if e := c.OpenCode.Endpoint; e != "" {
+		if u, err := url.Parse(e); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil {
+			errs = append(errs, fmt.Errorf("opencode.endpoint: %q is not an http or https URL without credentials", e))
+		}
 	}
 	if c.Daemon.MaxRuns < 1 {
 		errs = append(errs, fmt.Errorf("daemon.max_runs: %d; at least 1", c.Daemon.MaxRuns))
@@ -380,7 +433,7 @@ func (p Profile) validate(at string) []error {
 	}
 	for agent, m := range p.Agent.Model {
 		if !slices.Contains(Agents, agent) {
-			errs = append(errs, fmt.Errorf("%s.agent.model: %q is not claude, copilot or cursor", at, agent))
+			errs = append(errs, fmt.Errorf("%s.agent.model: %q is not claude, copilot, cursor or opencode", at, agent))
 		}
 		if m == "" || badModel(m) {
 			errs = append(errs, fmt.Errorf("%s.agent.model.%s: %q is not a model name", at, agent, m))
@@ -413,7 +466,7 @@ func (p Profile) validate(at string) []error {
 			errs = append(errs, fmt.Errorf("%s.after: %q is not %s or %s", at, f.After, Published, Tagged))
 		}
 		if !slices.Contains(Agents, f.Agent) {
-			errs = append(errs, fmt.Errorf("%s.agent: %q is not claude, copilot or cursor", at, f.Agent))
+			errs = append(errs, fmt.Errorf("%s.agent: %q is not claude, copilot, cursor or opencode", at, f.Agent))
 		}
 	}
 	slices.SortFunc(errs, func(a, b error) int { return strings.Compare(a.Error(), b.Error()) })

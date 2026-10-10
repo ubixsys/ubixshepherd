@@ -4,6 +4,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestMissingFileIsDefault(t *testing.T) {
@@ -166,5 +167,47 @@ func TestDeskWake(t *testing.T) {
 	}
 	if _, err := Parse([]byte("desk:\n  wake: sometimes\n")); err == nil || !strings.Contains(err.Error(), "desk.wake") {
 		t.Errorf("bad wake: %v", err)
+	}
+}
+
+func TestOpenCode(t *testing.T) {
+	c, err := Parse([]byte("opencode:\n  bin: /opt/oc/bin/opencode\n  endpoint: http://localhost:11434/v1\n" +
+		"defaults:\n  agent:\n    model: {opencode: \"local/qwen3-coder:30b\"}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.OpenCode.Bin != "/opt/oc/bin/opencode" || c.OpenCode.Endpoint != "http://localhost:11434/v1" {
+		t.Errorf("opencode = %+v", c.OpenCode)
+	}
+	if m := c.Profile("x").Agent.Model["opencode"]; m != "local/qwen3-coder:30b" {
+		t.Errorf("model = %q", m)
+	}
+	for name, in := range map[string]string{
+		"no scheme":   "opencode:\n  endpoint: localhost:11434\n",
+		"credentials": "opencode:\n  endpoint: http://user:pw@localhost:11434/v1\n",
+		"not http":    "opencode:\n  endpoint: ftp://localhost/v1\n",
+		"blank bin":   "opencode:\n  bin: \" oc\"\n",
+		"unknown key": "opencode:\n  port: 1\n",
+	} {
+		if _, err := Parse([]byte(in)); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+}
+
+func TestOpenCodeIdleTimeout(t *testing.T) {
+	for in, want := range map[string]time.Duration{"": DefaultOpenCodeIdle, "off": 0, "30m": 30 * time.Minute} {
+		c, err := Parse([]byte("opencode:\n  idle_timeout: \"" + in + "\"\n"))
+		if err != nil {
+			t.Fatalf("%q: %v", in, err)
+		}
+		if got := c.OpenCode.Idle(); got != want {
+			t.Errorf("idle_timeout %q = %v, want %v", in, got, want)
+		}
+	}
+	for _, in := range []string{"10s", "soon", "-5m"} {
+		if _, err := Parse([]byte("opencode:\n  idle_timeout: " + in + "\n")); err == nil {
+			t.Errorf("idle_timeout %q accepted", in)
+		}
 	}
 }
