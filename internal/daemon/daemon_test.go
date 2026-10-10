@@ -17,6 +17,7 @@ import (
 
 	"github.com/ubixsys/ubixshepherd/internal/api"
 	"github.com/ubixsys/ubixshepherd/internal/config"
+	"github.com/ubixsys/ubixshepherd/internal/desk"
 	"github.com/ubixsys/ubixshepherd/internal/paths"
 	"github.com/ubixsys/ubixshepherd/internal/store"
 	"github.com/ubixsys/ubixshepherd/internal/store/sqlite"
@@ -33,10 +34,17 @@ func newServer(t *testing.T) (*Server, *httptest.Server) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	s.DeskAgent = nopDesk{} // never the real claude in a test
 	ts := httptest.NewServer(s.Handler())
 	t.Cleanup(ts.Close)
+	t.Cleanup(s.Close) // before the store closes, and the test server after it
 	return s, ts
 }
+
+// nopDesk is a front desk that answers every turn with nothing.
+type nopDesk struct{}
+
+func (nopDesk) Turn(context.Context, desk.Spec, func(desk.Line)) error { return nil }
 
 func call(t *testing.T, ts *httptest.Server, token, method, path string, body any, out any) int {
 	t.Helper()

@@ -49,11 +49,35 @@ type Daemon struct {
 	LogLevel string `yaml:"log_level" json:"log_level"`
 }
 
-// Desk holds the front desk's settings (shepherd chat).
+// Desk holds the front desk's settings: the daemon's, and shepherd chat's own.
 type Desk struct {
 	// Model is the desk's model when the chat is given no --model and none was set
 	// with /model; "" leaves it to Claude Code's default.
 	Model string `yaml:"model" json:"model,omitempty"`
+	// Wake is when the daemon's front desk takes a turn on its own for swarm events
+	// (a run ended, a decision, a request needing routing): one of WakeModes; ""
+	// is WakeAttached.
+	Wake string `yaml:"wake" json:"wake,omitempty"`
+}
+
+// desk.wake's choices.
+const (
+	// WakeAttached: only while a client follows the desk's stream, and for a grace
+	// period after the last leaves; otherwise events wait as one digest for the next.
+	WakeAttached = "attached"
+	WakeAlways   = "always"
+	WakeNever    = "never"
+)
+
+// WakeModes are desk.wake's choices.
+var WakeModes = []string{WakeAttached, WakeAlways, WakeNever}
+
+// WakeMode is desk.wake, with its default filled in.
+func (d Desk) WakeMode() string {
+	if d.Wake == "" {
+		return WakeAttached
+	}
+	return d.Wake
 }
 
 // Agents are the agent CLIs Shepherd can start.
@@ -300,6 +324,9 @@ func (c Config) Validate() error {
 	}
 	if !slices.Contains(LogLevels, c.Daemon.LogLevel) {
 		errs = append(errs, fmt.Errorf("daemon.log_level: %q is not %s", c.Daemon.LogLevel, strings.Join(LogLevels, ", ")))
+	}
+	if c.Desk.Wake != "" && !slices.Contains(WakeModes, c.Desk.Wake) {
+		errs = append(errs, fmt.Errorf("desk.wake: %q is not %s", c.Desk.Wake, strings.Join(WakeModes, ", ")))
 	}
 	if badModel(c.Desk.Model) {
 		errs = append(errs, fmt.Errorf("desk.model: %q is not a model name", c.Desk.Model))

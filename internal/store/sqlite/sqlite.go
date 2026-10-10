@@ -8,7 +8,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -209,6 +211,18 @@ var migrations = []string{
 	// so a continued run records only what it added.
 	`ALTER TABLE runs ADD COLUMN session_usd REAL NOT NULL DEFAULT 0;
 	ALTER TABLE runs ADD COLUMN session_credits REAL NOT NULL DEFAULT 0;`,
+	// The daemon's front-desk conversation, per workspace: what clients replay and
+	// resume from by sequence number.
+	`CREATE TABLE desk_events (
+		seq          INTEGER PRIMARY KEY AUTOINCREMENT,
+		workspace_id INTEGER NOT NULL,
+		kind         TEXT NOT NULL,
+		text         TEXT NOT NULL DEFAULT '',
+		turn         INTEGER NOT NULL DEFAULT 0,
+		origin       TEXT NOT NULL DEFAULT '',
+		created      TEXT NOT NULL
+	);
+	CREATE INDEX desk_events_ws ON desk_events (workspace_id, seq);`,
 }
 
 // DB is a SQLite-backed store.Store.
@@ -912,4 +926,64 @@ func nonNil(s []string) []string {
 		return []string{}
 	}
 	return s
+}
+
+func (s *DB) AddDeskEvent(ctx context.Context, e store.DeskEvent) (store.DeskEvent, error) {
+	e.Created = time.Now().UTC()
+	res, err := s.db.ExecContext(ctx, `INSERT INTO desk_events (workspace_id, kind, text, turn, origin, created) VALUES (?, ?, ?, ?, ?, ?)`,
+		e.WorkspaceID, e.Kind, e.Text, e.Turn, e.Origin, e.Created.Format(time.RFC3339Nano))
+	if err != nil {
+		return e, err
+	}
+	if e.Seq, err = res.LastInsertId(); err != nil {
+		return e, err
+	}
+	// A message that starts a turn is its own turn's id.
+	if e.Turn == 0 && (e.Kind == store.DeskUser || e.Kind == store.DeskSystem) {
+		if _, err := s.db.ExecContext(ctx, `UPDATE desk_events SET turn = seq WHERE seq = ?`, e.Seq); err != nil {
+			return e, err
+		}
+		e.Turn = e.Seq
+	}
+	return e, nil
+}
+
+func (s *DB) DeskEvents(ctx context.Context, workspaceID, after int64, limit int) ([]store.DeskEvent, error) {
+	return s.deskEvents(ctx, `SELECT seq, workspace_id, kind, text, turn, origin, created FROM desk_events
+		WHERE workspace_id = ? AND seq > ? ORDER BY seq LIMIT ?`, workspaceID, after, limit)
+}
+
+func (s *DB) DeskHistory(ctx context.Context, workspaceID, before int64, limit int) ([]store.DeskEvent, error) {
+	if before <= 0 {
+		before = math.MaxInt64
+	}
+	out, err := s.deskEvents(ctx, `SELECT seq, workspace_id, kind, text, turn, origin, created FROM desk_events
+		WHERE workspace_id = ? AND seq < ? ORDER BY seq DESC LIMIT ?`, workspaceID, before, limit)
+	slices.Reverse(out)
+	return out, err
+}
+
+func (s *DB) deskEvents(ctx context.Context, q string, args ...any) ([]store.DeskEvent, error) {
+	rows, err := s.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []store.DeskEvent
+	for rows.Next() {
+		var e store.DeskEvent
+		var created string
+		if err := rows.Scan(&e.Seq, &e.WorkspaceID, &e.Kind, &e.Text, &e.Turn, &e.Origin, &created); err != nil {
+			return nil, err
+		}
+		e.Created = parseTime(created)
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+func (s *DB) TrimDeskEvents(ctx context.Context, workspaceID int64, keep int) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM desk_events WHERE workspace_id = ? AND seq <= (
+		SELECT seq FROM desk_events WHERE workspace_id = ? ORDER BY seq DESC LIMIT 1 OFFSET ?)`, workspaceID, workspaceID, keep)
+	return err
 }

@@ -134,6 +134,19 @@ sessions.
 | `/model` | show the desk's model and where it came from; `/model opus` sets it, `/model reset` goes back to `config.yaml` |
 | `/new` | start a new conversation with the desk |
 
+**The desk in the daemon.** The daemon also runs a front desk of its own, one
+conversation per workspace kept in its store, for clients that follow one shared
+conversation instead of starting their own: the browser UI, and the terminal once
+`shepherd chat` moves onto it (today the chat still runs its own desk). A client posts the
+person's messages to `POST /v1/desk/turn` and follows `GET /v1/desk/stream`, server-sent
+events that resume from a sequence number; `internal/api/desk.go` documents the API.
+Swarm events (a run ended, a decision waits, a request needs routing) wake this desk on
+its own as `desk.wake` says: `attached`, the default, only while a client follows it, and
+otherwise as one digest when the next one attaches; `always`; or `never`. A turn the desk
+takes on its own cannot answer a decision, only one the person started. Each turn's cost
+is recorded as `desk` spend. `GET /v1/feed/stream` streams the feed the same way, so
+clients need not poll `GET /v1/feed`.
+
 ### Moving a repo onto Shepherd
 
 A repo already coordinated by hand, with a lane table in a file like `AGENTS-COORD.md`
@@ -412,7 +425,12 @@ their runs interrupted.
 
 Shepherd keeps its files in `~/.shepherd` on every OS (or `$SHEPHERD_HOME`): the config,
 the SQLite store, the daemon's log, and the running daemon's address and access token. The daemon listens on
-loopback only. On its first start it writes `~/.shepherd/config.yaml` with every setting
+loopback only. The token in `daemon.json` is the operator's: the person's own tools use it.
+Each agent Shepherd starts gets a token of its own instead, good only for its run's worker
+tools and revoked when the run ends, so an agent's tools cannot answer its decisions or
+start other agents. That stops accidents, not a determined agent: an agent runs as your OS
+user and can read `daemon.json`. Isolating agents under another account or a sandbox is
+planned (see [docs/design.md](docs/design.md#317-the-humanagent-boundary-scoped-tokens)). On its first start it writes `~/.shepherd/config.yaml` with every setting
 commented out, so the defaults apply until you change one; it never touches the file
 again. A repo's profile comes from that file, over cautious defaults (a human merges, tags
 and deploys; agents plan first):
@@ -432,7 +450,7 @@ repos:
 
 Other settings worth knowing: `daemon.log_level` (`debug`, `info`, `warn` or `error`,
 applied on reload), `desk.model` (the front desk's model, overridden by `shepherd chat
---model` or `/model`), and `agent.model` per repo (a model per agent, used when `lane run`
+--model` or `/model`), `desk.wake` (when the daemon's desk wakes on its own), and `agent.model` per repo (a model per agent, used when `lane run`
 names none).
 
 ## Branches and releases

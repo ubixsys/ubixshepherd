@@ -109,6 +109,10 @@ func (r *Runner) sessionCost(ctx context.Context, run *store.Run) {
 	run.CostUSD, run.Credits = beyond(run.SessionUSD, usd), beyond(run.SessionCredits, credits)
 }
 
+// SessionDelta is what a session added since its last total, for agent CLIs that report
+// the whole session's cost each time; a total below before means a new session.
+func SessionDelta(total, before float64) float64 { return beyond(total, before) }
+
 func beyond(total, before float64) float64 {
 	if total < before {
 		return total

@@ -267,7 +267,10 @@ func TestRoutedRequestStartsOrSaysWhy(t *testing.T) {
 
 	// Over the daily budget, Shepherd's own routing holds and says why...
 	budget := 0.01
-	f.runner.Config.Daemon.Budget = &budget
+	// Through SetConfig, as a reload does: runs that ended read the config meanwhile.
+	cfg := f.runner.Conf()
+	cfg.Daemon.Budget = &budget
+	f.runner.SetConfig(cfg)
 	f.runner.Spend(ctx, store.Spend{Source: "claude", USD: 1})
 	held, _ := f.runner.RequestHelp(ctx, store.Request{FromRun: asker.ID, Kind: KindHandoff, Lane: "api", Message: "more"})
 	waitFeed(t, f, fmt.Sprintf("request %d waits: held: today's spend", held.ID))

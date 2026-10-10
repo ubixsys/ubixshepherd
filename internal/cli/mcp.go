@@ -7,9 +7,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/ubixsys/ubixshepherd/internal/api"
+	"github.com/ubixsys/ubixshepherd/internal/dispatch"
+	"github.com/ubixsys/ubixshepherd/internal/paths"
 	"github.com/ubixsys/ubixshepherd/internal/version"
 )
 
@@ -434,15 +439,53 @@ func workerTools() []mcpTool {
 func runMCP(ctx context.Context, env Env, args []string) error {
 	fs := flags("mcp", env)
 	worker := fs.Bool("worker", false, "serve the worker tools, for an agent Shepherd started")
+	scoped := fs.Bool("scoped", false, "refuse to start without SHEPHERD_TOKEN (for the daemon's front desk)")
 	if pos, err := parse(fs, args); err != nil {
 		return err
 	} else if len(pos) > 0 {
 		return errUsage
 	}
+	// Started by Shepherd (an agent's worker tools, or the daemon's front desk): call
+	// the daemon with the token it was given, never daemon.json's operator token.
+	if *scoped && os.Getenv(dispatch.EnvToken) == "" {
+		return fmt.Errorf("--scoped needs %s: this server is for the daemon's front desk, and will not fall back to daemon.json", dispatch.EnvToken)
+	}
+	if os.Getenv(dispatch.EnvToken) != "" {
+		scoped, done, err := scopedEnv(env)
+		if err != nil {
+			return err
+		}
+		defer done()
+		env = scoped
+	}
 	if *worker {
 		return serveMCP(ctx, env, env.Stdin, env.Stdout, workerTools(), workerInstructions)
 	}
 	return serveMCP(ctx, env, env.Stdin, env.Stdout, mcpTools(), mcpInstructions)
+}
+
+// scopedEnv is env with its commands pointed at the daemon in SHEPHERD_URL with the
+// token in SHEPHERD_TOKEN, through a runtime file of its own in a private directory:
+// commands find their daemon by the runtime file, so they all use that token. It never
+// starts a daemon. done removes the directory.
+func scopedEnv(env Env) (Env, func(), error) {
+	u, err := url.Parse(os.Getenv(dispatch.EnvURL))
+	if err != nil || u.Host == "" {
+		return env, nil, fmt.Errorf("%s is set but %s is not a daemon URL", dispatch.EnvToken, dispatch.EnvURL)
+	}
+	dir, err := os.MkdirTemp("", "shepherd-mcp-")
+	if err != nil {
+		return env, nil, err
+	}
+	done := func() { os.RemoveAll(dir) }
+	b, _ := json.Marshal(api.Runtime{Addr: u.Host, Token: os.Getenv(dispatch.EnvToken)})
+	if err := os.WriteFile(filepath.Join(dir, "daemon.json"), b, 0o600); err != nil {
+		done()
+		return env, nil, err
+	}
+	env.Layout = paths.Layout{Home: dir}
+	env.Autostart = false
+	return env, done, nil
 }
 
 func serveMCP(ctx context.Context, env Env, in io.Reader, out io.Writer, toolset []mcpTool, instructions string) error {

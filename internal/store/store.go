@@ -296,6 +296,37 @@ type FeedItem struct {
 	Created time.Time `json:"created"`
 }
 
+// Desk event kinds: the closed set of what the daemon's front-desk conversation records.
+const (
+	DeskUser      = "user"       // the person's message; its Seq is its turn's id
+	DeskSystem    = "system"     // what Shepherd told the desk on its own (a wake-up)
+	DeskTurnStart = "turn_start" // a turn began
+	DeskAssistant = "assistant"  // the desk's reply, whole
+	DeskTool      = "tool"       // a tool call, in short
+	DeskCost      = "cost"       // what the turn cost, in dollars, as text
+	DeskError     = "error"      // the turn failed, or something around it did
+	DeskTurnEnd   = "turn_end"   // a turn ended; Text says how when not done
+	DeskNew       = "new"        // the person started a new conversation
+)
+
+// Desk event origins: who started the turn an event belongs to.
+const (
+	DeskByHuman  = "human"  // the person, through an operator client
+	DeskBySystem = "system" // the daemon, waking the desk for the swarm's events
+)
+
+// DeskEvent is one entry in a workspace's front-desk conversation.
+type DeskEvent struct {
+	Seq         int64  `json:"seq"`
+	WorkspaceID int64  `json:"workspace_id"`
+	Kind        string `json:"kind"`
+	Text        string `json:"text,omitempty"`
+	// Turn is the turn it belongs to: the Seq of the message that started it.
+	Turn    int64     `json:"turn,omitempty"`
+	Origin  string    `json:"origin,omitempty"`
+	Created time.Time `json:"created"`
+}
+
 // LaneForge is what the forge last said about a lane's branch.
 type LaneForge struct {
 	LaneID         int64  `json:"lane_id"`
@@ -409,6 +440,18 @@ type Store interface {
 	AddSpend(ctx context.Context, sp Spend) error
 	// SpendOn totals a day's spend by source.
 	SpendOn(ctx context.Context, day string) (map[string]Spend, error)
+
+	// AddDeskEvent appends to a workspace's front-desk conversation and returns the
+	// event with its sequence number and time. A user or system message with no Turn
+	// starts one: its Turn is its own Seq.
+	AddDeskEvent(ctx context.Context, e DeskEvent) (DeskEvent, error)
+	// DeskEvents returns a workspace's desk events after seq, oldest first.
+	DeskEvents(ctx context.Context, workspaceID, after int64, limit int) ([]DeskEvent, error)
+	// DeskHistory returns up to limit of a workspace's desk events before seq (0 for
+	// the newest), oldest first.
+	DeskHistory(ctx context.Context, workspaceID, before int64, limit int) ([]DeskEvent, error)
+	// TrimDeskEvents keeps a workspace's newest keep desk events and deletes the rest.
+	TrimDeskEvents(ctx context.Context, workspaceID int64, keep int) error
 
 	// LaneForge returns a zero value (with LaneID set) for a lane the forge never saw.
 	LaneForge(ctx context.Context, laneID int64) (LaneForge, error)

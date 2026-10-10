@@ -26,7 +26,7 @@ import (
 const fakeAgent = `#!/bin/sh
 if [ "$1" = create-chat ]; then echo "11111111-2222-4333-8444-555555555555"; exit 0; fi
 prompt=$(cat)
-echo "fake agent in $(pwd), run $SHEPHERD_RUN, lane $SHEPHERD_LANE"
+echo "fake agent in $(pwd), run $SHEPHERD_RUN, lane $SHEPHERD_LANE, client [$SHEPHERD_CLIENT]"
 echo "ARGS: $(printf '%s ' "$@" | tr '\n' ' ')"
 echo "STDIN: $(printf '%s' "$prompt" | tr '\n' ' ')"
 case "$MODE" in quick) [ -n "$CREDITS" ] && echo "AI Credits $CREDITS (13s)"; [ -n "$COST" ] && echo "{\"type\":\"result\",\"subtype\":\"success\",\"total_cost_usd\":$COST}"; echo "copilot --resume=cop-$SHEPHERD_RUN-session"; exit 0 ;; esac
@@ -131,6 +131,7 @@ func (f *fixture) wait(t *testing.T, id int64) store.Run {
 
 func TestRunRecordsOutcomeAndBlocksPush(t *testing.T) {
 	f := newFixture(t, "ok")
+	t.Setenv(EnvClient, "desk") // as when the daemon was started from the desk's tools
 	run, err := f.runner.Start(context.Background(), StartRequest{LaneID: f.lane.ID, Agent: "claude", Prompt: "do the work"})
 	if err != nil {
 		t.Fatal(err)
@@ -140,7 +141,7 @@ func TestRunRecordsOutcomeAndBlocksPush(t *testing.T) {
 		t.Errorf("run = %+v", done)
 	}
 	log, _ := os.ReadFile(done.Log)
-	for _, want := range []string{"fake agent in " + f.lane.Worktree, "lane work", "push blocked", "[REDACTED]", "succeeded (exit 0) with 1 commit"} {
+	for _, want := range []string{"fake agent in " + f.lane.Worktree, "lane work, client []", "push blocked", "[REDACTED]", "succeeded (exit 0) with 1 commit"} {
 		if !strings.Contains(string(log), want) {
 			t.Errorf("log lacks %q:\n%s", want, log)
 		}

@@ -9,6 +9,50 @@ protocol) is listed under **Interface changes** in the release that makes it.
 
 ## [Unreleased]
 
+### Added
+
+- **Scoped tokens.** Besides the operator token in `daemon.json`, the daemon mints a
+  worker token for each agent run, passed to the agent as `SHEPHERD_TOKEN` with the API
+  address in `SHEPHERD_URL`, and revoked when the run ends or the daemon restarts. A
+  worker token may only report, ask the person, ask another lane, reserve and release
+  its own lane's tags, read its own run and run the pre-push check. A desk role, for a
+  front desk the daemon runs, gets the operator tools but may answer a decision only in
+  a turn the person started. See `docs/design.md` §3.17.
+- **The front desk in the daemon.** The daemon runs a front desk of its own, one
+  conversation per workspace kept in the store, that clients follow instead of starting
+  their own: `POST /v1/desk/turn`, `GET /v1/desk/stream` (server-sent events, resumable
+  by sequence number), `GET /v1/desk/history`, `GET /v1/desk/status`,
+  `POST /v1/desk/interrupt` and `POST /v1/desk/new`. Swarm events wake it on its own
+  as the new `desk.wake` setting says (`attached`, the default, `always` or `never`),
+  as one digest when nobody was attached. A turn it takes on its own cannot answer a
+  decision. Each turn's own cost is recorded as `desk` spend. `shepherd chat` keeps its
+  own desk for now. See `docs/design.md` §3.18.
+- **A feed stream.** `GET /v1/feed/stream` sends the feed as server-sent events, each
+  item with its event kind, resumable by id or `Last-Event-ID`, with a heartbeat every
+  15 seconds and a limit on subscribers. `GET /v1/feed` is unchanged.
+
+### Fixed
+
+- Agents no longer inherit `SHEPHERD_CLIENT` from the daemon. A daemon started from
+  the front desk's tools passed `desk` on to every agent, so lanes an agent opened were
+  recorded as opened by the desk.
+
+### Interface changes
+
+- The HTTP API answers 403 to a scoped token calling an endpoint its role does not
+  allow. The operator token is unchanged and may call every endpoint.
+- `shepherd worker` commands and `shepherd mcp`, when started with `SHEPHERD_TOKEN`
+  set, call the daemon at `SHEPHERD_URL` with that token and no longer read
+  `daemon.json`. A worker command with no run token refuses instead of finding its run
+  from the lane.
+
+### Known limits
+
+- **Scoped tokens are not isolation.** They stop accidents and tool misuse, but an
+  agent running as the same OS user as the daemon can read `daemon.json` and obtain
+  the operator token. Real isolation needs agents under a separate account or an OS
+  sandbox, planned for later.
+
 ## [0.1.0-beta.1] - 2026-10-09
 
 The first public beta of uBixShepherd: one local daemon coordinates agent work across a

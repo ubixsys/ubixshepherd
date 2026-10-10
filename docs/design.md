@@ -499,8 +499,8 @@ own CLI, resuming its session, until the human exits back. Shepherd keeps the re
 way. Stopping a run or closing a lane asks for confirmation; reading never does.
 
 **Who the human talks to.** The human is the master coordinator; the **front desk** is
-their voice: an ordinary agent session hosted in the terminal and wired to Shepherd's
-operator tools, with read-only access to the workspace. It drafts work orders and
+their voice: an ordinary agent session, hosted by the daemon (§3.18; the terminal
+chat still hosts its own until it moves onto that one), and wired to Shepherd's operator tools, with read-only access to the workspace. It drafts work orders and
 summarises. Shepherd does not run its own model for the conversation or for the dock: the
 control plane and everything it displays stay deterministic code ("the shepherd is not a
 sheep"), and the front desk can be swapped without changing anything else.
@@ -530,6 +530,64 @@ Some of these use terminal features that the current terminal UI library exposes
 its next major version (synchronized output, tab progress, clipboard, distinct Shift+Enter).
 Moving to it is a step of its own, after checking that printing above an inline view and
 resizing behave as the thread needs.
+
+### 3.17 The human/agent boundary: scoped tokens
+
+**Status: built (2026-10-09) as a first step; isolation is planned for later.**
+
+Some acts are the person's alone (§3.7): answering a decision, starting or stopping
+agents, opening and closing lanes, changing settings. The daemon enforces that at its API,
+the boundary every client crosses, with three kinds of token:
+
+| Role | Who holds it | Lives | May call |
+|---|---|---|---|
+| Operator | The person and their own tools: the CLI, the terminal chat, their MCP server | `daemon.json`, replaced on each daemon start | Every endpoint |
+| Worker | One agent Shepherd started, in its environment as `SHEPHERD_TOKEN` | Minted when its run starts; revoked when the run ends or the daemon restarts | What the worker tools need, for its own run: report, ask the person, ask another lane, reserve and release its lane's tags, read its run, the pre-push check |
+| Desk | The front desk the daemon runs | Minted for the desk; revoked when the daemon stops | The operator tools, except answering a decision, which it may do only in a turn the person started |
+
+A worker token used on another run's resources, or after its run ended, is refused. The
+daemon keeps only a hash of each scoped token, in memory. Clients that run inside an agent
+(the worker MCP server, and the operator MCP server when Shepherd starts it) use the token
+they were given and never read `daemon.json`. For agent CLIs that start MCP servers
+without passing their environment on, the run's token is also written to the lane
+worktree's private git directory, never the work tree, and removed when the run ends.
+
+**What this does not do.** Scoped tokens stop accidents and tool misuse: an agent's tools
+cannot answer its own question, start another agent or close a lane, and a desk woken by an
+event cannot answer for the person. They are not isolation. An agent runs as the same OS
+user as the daemon, so it can read `daemon.json` and use the operator token. Real
+isolation needs agents under a separate account or an OS sandbox; that is planned for
+later.
+
+### 3.18 The front desk in the daemon
+
+**Status: built (2026-10-09); the terminal chat moves onto it next.**
+
+The maintainer decided that the desk lives in the daemon, and that the terminal and the
+browser are thin clients of one shared conversation. Before, `shepherd chat` started the
+desk itself: one conversation per open terminal, and none at all when no terminal was
+open, so the swarm's events waited for the person to come back.
+
+- **One conversation per workspace**, run by the daemon one turn at a time, with a
+  bounded queue. A turn is a headless Claude Code session resumed with the person's
+  message, or with what Shepherd has to tell it, as §3.16's desk is, with the same
+  read-only tools and operator tools. It keeps its own session, never the chat's: two
+  processes must not resume one session.
+- **Kept in the store.** Every event of the conversation (the person's message, a
+  wake-up, the reply, a tool call, the cost, an error, a turn's start and end) has a
+  sequence number, the turn it belongs to and that turn's origin, human or system. Clients
+  follow it as server-sent events and resume from a sequence number after a dropped
+  connection or a daemon restart; a restart closes the turn it cut short. Partial replies
+  stream live and are not stored. Old events are trimmed past a cap.
+- **Wake-ups move into the daemon.** The kinds that continued the chat's desk on their own
+  (a run ended, an agent out of quota, a request needing routing) and a decision waiting
+  now continue the daemon's desk, as `desk.wake` allows: while a client is attached and
+  briefly after (`attached`, the default), `always`, or `never`. Events that arrive with
+  nobody attached wait as one digest, newest first past a bound, for the next client.
+- **A wake-up cannot answer for the person.** Each turn gets a desk token (§3.17) that may
+  answer a decision only when the person started the turn.
+- **Cost per turn.** Claude Code reports a session's total, so a turn records the
+  difference from the last total, as spend from `desk`.
 
 ## 4. Where the efficiency comes from
 
