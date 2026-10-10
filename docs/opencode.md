@@ -21,6 +21,8 @@ that needs judgment.
      # bin: /opt/opencode/bin/opencode
      endpoint: http://localhost:11434/v1   # any OpenAI-compatible host
      # idle_timeout: 10m                   # stop a run that prints nothing this long
+     # context: 32768                      # tokens; when OpenCode compacts
+     # output: 8192                        # tokens; must be less than context
    defaults:
      agent:
        model: {opencode: "local/qwen3-coder:30b"}
@@ -30,6 +32,11 @@ that needs judgment.
    `provider/model`; a model with no provider runs under the provider `local`. With no
    `endpoint`, the provider comes from your own OpenCode configuration and
    `agent.model.opencode` names a model in it.
+   `context` and `output` (default 32768 and 8192) are the limits Shepherd tells
+   OpenCode about the model under `endpoint`; `output` must be less than `context`.
+   They only tell OpenCode when to compact. The model server must load at least that
+   much context itself: for Ollama, set `OLLAMA_CONTEXT_LENGTH` or a Modelfile
+   `num_ctx`, because the OpenAI-compatible endpoint cannot set it per request.
 3. `shepherd lane run <lane> --agent opencode "task"`. `shepherd run attach <id>` opens
    the session in OpenCode's own interface (`opencode -s <session>`).
 

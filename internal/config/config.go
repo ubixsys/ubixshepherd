@@ -73,6 +73,29 @@ type OpenCode struct {
 	// records it failed as hung: a duration of at least a minute, or "off". "" is
 	// DefaultOpenCodeIdle. Any output resets it.
 	IdleTimeout string `yaml:"idle_timeout" json:"idle_timeout,omitempty"`
+	// Context and Output are the token limits told to OpenCode for the model run under
+	// Endpoint; they decide when OpenCode compacts, and do not size the model host's
+	// own context. 0 means DefaultOpenCodeContext and DefaultOpenCodeOutput.
+	Context int `yaml:"context" json:"context,omitempty"`
+	Output  int `yaml:"output" json:"output,omitempty"`
+}
+
+// OpenCode's model limits when none are configured.
+const (
+	DefaultOpenCodeContext = 32768
+	DefaultOpenCodeOutput  = 8192
+)
+
+// Limits is the context and output token limits, with the defaults filled in.
+func (o OpenCode) Limits() (context, output int) {
+	context, output = o.Context, o.Output
+	if context == 0 {
+		context = DefaultOpenCodeContext
+	}
+	if output == 0 {
+		output = DefaultOpenCodeOutput
+	}
+	return context, output
 }
 
 // DefaultOpenCodeIdle is OpenCode's idle limit when none is configured: generous,
@@ -466,6 +489,17 @@ func (c Config) Validate() error {
 	if t := c.OpenCode.IdleTimeout; t != "" && t != "off" {
 		if d, err := time.ParseDuration(t); err != nil || d < time.Minute {
 			errs = append(errs, fmt.Errorf("opencode.idle_timeout: %q; a duration of at least 1m, or off", t))
+		}
+	}
+	if c.OpenCode.Context < 0 {
+		errs = append(errs, fmt.Errorf("opencode.context: %d is not a positive number of tokens", c.OpenCode.Context))
+	}
+	if c.OpenCode.Output < 0 {
+		errs = append(errs, fmt.Errorf("opencode.output: %d is not a positive number of tokens", c.OpenCode.Output))
+	}
+	if c.OpenCode.Context >= 0 && c.OpenCode.Output >= 0 {
+		if ctx, out := c.OpenCode.Limits(); out >= ctx {
+			errs = append(errs, fmt.Errorf("opencode.output: %d must be less than the context, %d", out, ctx))
 		}
 	}
 	if e := c.OpenCode.Endpoint; e != "" {

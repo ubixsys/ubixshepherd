@@ -245,3 +245,32 @@ func TestDeskRotation(t *testing.T) {
 		}
 	}
 }
+
+func TestOpenCodeLimits(t *testing.T) {
+	c, err := Parse([]byte("opencode:\n  endpoint: http://localhost:11434/v1\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ctx, out := c.OpenCode.Limits(); ctx != 32768 || out != 8192 {
+		t.Errorf("defaults = %d, %d", ctx, out)
+	}
+	c, err = Parse([]byte("opencode:\n  context: 65536\n  output: 4096\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ctx, out := c.OpenCode.Limits(); ctx != 65536 || out != 4096 {
+		t.Errorf("limits = %d, %d", ctx, out)
+	}
+	// Setting only one is checked against the other's default.
+	for name, in := range map[string]string{
+		"negative context":   "opencode:\n  context: -1\n",
+		"negative output":    "opencode:\n  output: -1\n",
+		"output ge context":  "opencode:\n  context: 4096\n  output: 4096\n",
+		"context below dflt": "opencode:\n  context: 8000\n",
+		"not a number":       "opencode:\n  context: lots\n",
+	} {
+		if _, err := Parse([]byte(in)); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+}

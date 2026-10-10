@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -493,5 +494,29 @@ func TestOpenCodeConfigAllowsOnlyTheWorktree(t *testing.T) {
 	a := strings.Join(openCodeArgs(Opts{Worktree: wt}), " ")
 	if !strings.Contains(a, "--dir "+wt) {
 		t.Errorf("args lack --dir: %s", a)
+	}
+}
+
+func TestOpenCodeConfigLimits(t *testing.T) {
+	limit := func(s config.OpenCode) string {
+		var cfg struct {
+			Provider map[string]struct {
+				Models map[string]struct {
+					Limit map[string]int `json:"limit"`
+				} `json:"models"`
+			} `json:"provider"`
+		}
+		out := openCodeConfig(Opts{Model: "local/m"}, s)
+		if err := json.Unmarshal([]byte(out), &cfg); err != nil {
+			t.Fatalf("not JSON: %v", err)
+		}
+		l := cfg.Provider["local"].Models["m"].Limit
+		return strconv.Itoa(l["context"]) + "/" + strconv.Itoa(l["output"])
+	}
+	if got := limit(config.OpenCode{Endpoint: "http://h/v1"}); got != "32768/8192" {
+		t.Errorf("default limits = %s", got)
+	}
+	if got := limit(config.OpenCode{Endpoint: "http://h/v1", Context: 65536, Output: 4096}); got != "65536/4096" {
+		t.Errorf("configured limits = %s", got)
 	}
 }
