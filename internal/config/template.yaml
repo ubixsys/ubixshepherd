@@ -32,6 +32,14 @@
 #   ## always, or never.
 #   wake: attached
 
+## OpenCode, for small mechanical edits on a local model (see docs/opencode.md).
+# opencode:
+#   ## The opencode executable; empty looks on PATH, then in ~/.opencode/bin.
+#   bin: ""
+#   ## An OpenAI-compatible model host; agent.model.opencode then names the model as
+#   ## provider/model (local/qwen3-coder:30b). Empty uses your own OpenCode config.
+#   endpoint: http://localhost:11434/v1
+
 ## The profile every repo starts from.
 # defaults:
 #   base_branch: main
@@ -68,7 +76,7 @@
 #     ## allows every tool for auto and bypassPermissions; Cursor always runs with --force.
 #     permission_mode: auto
 #     ## The model each agent runs on when lane run names none, by agent (claude,
-#     ## copilot, cursor); an agent left out uses its CLI's own default. A repo's
+#     ## copilot, cursor, opencode); an agent left out uses its CLI's own default. A repo's
 #     ## entries replace these for the same agent. A model given to lane run wins.
 #     model: {claude: sonnet}
 #   ## What agents may do unasked: human or agent.

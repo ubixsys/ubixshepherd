@@ -168,3 +168,28 @@ func TestDeskWake(t *testing.T) {
 		t.Errorf("bad wake: %v", err)
 	}
 }
+
+func TestOpenCode(t *testing.T) {
+	c, err := Parse([]byte("opencode:\n  bin: /opt/oc/bin/opencode\n  endpoint: http://localhost:11434/v1\n" +
+		"defaults:\n  agent:\n    model: {opencode: \"local/qwen3-coder:30b\"}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.OpenCode.Bin != "/opt/oc/bin/opencode" || c.OpenCode.Endpoint != "http://localhost:11434/v1" {
+		t.Errorf("opencode = %+v", c.OpenCode)
+	}
+	if m := c.Profile("x").Agent.Model["opencode"]; m != "local/qwen3-coder:30b" {
+		t.Errorf("model = %q", m)
+	}
+	for name, in := range map[string]string{
+		"no scheme":   "opencode:\n  endpoint: localhost:11434\n",
+		"credentials": "opencode:\n  endpoint: http://user:pw@localhost:11434/v1\n",
+		"not http":    "opencode:\n  endpoint: ftp://localhost/v1\n",
+		"blank bin":   "opencode:\n  bin: \" oc\"\n",
+		"unknown key": "opencode:\n  port: 1\n",
+	} {
+		if _, err := Parse([]byte(in)); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+}
