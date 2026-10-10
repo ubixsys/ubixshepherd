@@ -30,6 +30,16 @@ protocol) is listed under **Interface changes** in the release that makes it.
 - **A feed stream.** `GET /v1/feed/stream` sends the feed as server-sent events, each
   item with its event kind, resumable by id or `Last-Event-ID`, with a heartbeat every
   15 seconds and a limit on subscribers. `GET /v1/feed` is unchanged.
+- **The web UI, served by the daemon.** The binary embeds the build of `web/` and the
+  daemon serves it at its own address; `make build` builds it first when Node is
+  installed, and a binary built without it serves a page saying how to. `shepherd web`
+  signs a browser in: it asks the daemon for a link that works once, for a minute, and
+  opens it (`--print` prints it instead; `--sign-out-all` ends every browser session).
+  Opening the link sets a session cookie (HttpOnly, SameSite=Strict, for `/v1` only,
+  12 hours, held in the daemon's memory), so the browser never sees the operator token.
+  A browser session has a new `web` role: the front desk's routes, the front desk
+  conversation and answering decisions, but not the daemon's setup or minting links.
+  Remote use is an SSH tunnel to the daemon's loopback port. See `web/README.md`.
 
 ### Fixed
 
@@ -45,6 +55,22 @@ protocol) is listed under **Interface changes** in the release that makes it.
   set, call the daemon at `SHEPHERD_URL` with that token and no longer read
   `daemon.json`. A worker command with no run token refuses instead of finding its run
   from the lane.
+- New endpoints: `POST /v1/web/signin` (operator: a one-time sign-in link),
+  `GET /v1/web/signin?code=` (the link: sets the session cookie and redirects to `/`),
+  `GET /v1/web/session` (the caller's role, and a browser session's CSRF token and
+  expiry), `POST /v1/web/signout` and `DELETE /v1/web/sessions` (operator). Paths
+  outside `/v1` now serve the web UI. New command: `shepherd web`.
+- Every request must name a loopback host (`localhost`, `127.0.0.0/8`, `::1`, any port)
+  in its `Host` header; anything else is answered 421, against DNS rebinding. A request
+  with a token that carries an `Origin` other than the daemon's own is answered 403.
+- A request with the session cookie and no token must come from the daemon's own
+  origin (`Origin` and `Sec-Fetch-Site` are checked) and, if it changes anything, carry
+  `Origin` and the session's CSRF token in `X-Shepherd-CSRF`. The daemon sends no CORS
+  headers.
+- The front desk endpoints (`/v1/desk/*`) accept a browser session as well as the
+  operator token.
+- A request with no token and no session is answered 401 with "not signed in: run
+  shepherd web for a sign-in link".
 
 ### Known limits
 
@@ -52,6 +78,11 @@ protocol) is listed under **Interface changes** in the release that makes it.
   agent running as the same OS user as the daemon can read `daemon.json` and obtain
   the operator token. Real isolation needs agents under a separate account or an OS
   sandbox, planned for later.
+- **Web sign-in on a shared machine.** Opening the sign-in link passes it to the
+  browser opener on its command line, where another local user could read it for that
+  moment and race the browser to use it; `shepherd web --print` avoids that. Anyone
+  with the operator token can mint a link. The daemon speaks plain HTTP on loopback, so
+  the session cookie is not marked Secure; TLS for direct remote access is later work.
 
 ## [0.1.0-beta.1] - 2026-10-09
 
