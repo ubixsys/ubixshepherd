@@ -57,9 +57,9 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
   return (await res.json()) as T
 }
 
-const get = <T>(path: string) => call<T>(path)
-const post = <T>(path: string, body: unknown) => call<T>(path, { method: 'POST', body: JSON.stringify(body) })
-const qs = (params: Record<string, string | number>) => new URLSearchParams(Object.entries(params).map(([k, v]) => [k, String(v)])).toString()
+export const get = <T>(path: string) => call<T>(path)
+export const post = <T>(path: string, body: unknown) => call<T>(path, { method: 'POST', body: JSON.stringify(body) })
+export const qs = (params: Record<string, string | number>) => new URLSearchParams(Object.entries(params).map(([k, v]) => [k, String(v)])).toString()
 
 /** How many runs the board reads: enough to know every open lane's latest run. */
 export const RECENT_RUNS = 200
