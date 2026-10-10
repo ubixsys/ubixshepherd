@@ -5,8 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
+	"os"
 
 	"github.com/ubixsys/ubixshepherd/internal/api"
+	"github.com/ubixsys/ubixshepherd/internal/client"
+	"github.com/ubixsys/ubixshepherd/internal/dispatch"
 	"github.com/ubixsys/ubixshepherd/internal/fold"
 )
 
@@ -72,7 +76,7 @@ func hookPrePush(ctx context.Context, env Env, args []string) error {
 	if err != nil {
 		return err
 	}
-	c, err := dial(ctx, env)
+	c, err := hookClient(ctx, env)
 	if err != nil {
 		return fmt.Errorf("cannot check this push: %w\n(push without Shepherd's check: git push --no-verify)", err)
 	}
@@ -96,4 +100,25 @@ func hookPrePush(ctx context.Context, env Env, args []string) error {
 	}
 	fmt.Fprintln(env.Stderr, "Widen the scope with a new lane, move the change to the lane that owns it, or skip once: git push --no-verify")
 	return errSilent
+}
+
+// hookClient is the daemon client the pre-push hook calls with. A push by an agent
+// Shepherd started runs with that run's SHEPHERD_URL and SHEPHERD_TOKEN, which are the
+// only credentials it needs: use them, and never start a daemon for it. Only when both
+// are unset does the hook read the runtime file, as a push by the person does.
+func hookClient(ctx context.Context, env Env) (*client.Client, error) {
+	tok, base := os.Getenv(dispatch.EnvToken), os.Getenv(dispatch.EnvURL)
+	if tok == "" && base == "" {
+		return dial(ctx, env)
+	}
+	if tok == "" || base == "" {
+		return nil, fmt.Errorf("%s and %s must be set together", dispatch.EnvURL, dispatch.EnvToken)
+	}
+	u, err := url.Parse(base)
+	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+		return nil, fmt.Errorf("%s is not a daemon URL", dispatch.EnvURL)
+	}
+	c := client.New(u.Scheme+"://"+u.Host, tok)
+	c.Name = env.Client
+	return c, nil
 }
