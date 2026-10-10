@@ -206,6 +206,119 @@ describe('ChatPage', () => {
   })
 })
 
+describe('following the bottom', () => {
+  let height = 2000
+  let y = 1300
+  const scrollTo = vi.fn()
+  const observers: (() => void)[] = []
+  const saved = { scrollTo: window.scrollTo, scrollY: Object.getOwnPropertyDescriptor(window, 'scrollY'), innerHeight: Object.getOwnPropertyDescriptor(window, 'innerHeight') }
+
+  beforeEach(() => {
+    height = 2000
+    y = 1300 // 1300 + 700 is the bottom
+    scrollTo.mockClear()
+    observers.length = 0
+    window.scrollTo = scrollTo as unknown as typeof window.scrollTo
+    Object.defineProperty(document.documentElement, 'scrollHeight', { configurable: true, get: () => height })
+    Object.defineProperty(window, 'scrollY', { configurable: true, get: () => y })
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: 700 })
+    vi.stubGlobal('ResizeObserver', class {
+      constructor(cb: () => void) {
+        observers.push(cb)
+      }
+      observe() {}
+      disconnect() {}
+    })
+  })
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    window.scrollTo = saved.scrollTo
+    delete (document.documentElement as { scrollHeight?: number }).scrollHeight
+    if (saved.scrollY) Object.defineProperty(window, 'scrollY', saved.scrollY)
+    else delete (window as { scrollY?: number }).scrollY
+    if (saved.innerHeight) Object.defineProperty(window, 'innerHeight', saved.innerHeight)
+  })
+
+  const grow = (to: number) => {
+    height = to
+    act(() => observers.forEach((cb) => cb()))
+  }
+  const scrollTop = (to: number) => {
+    y = to
+    act(() => {
+      window.dispatchEvent(new Event('scroll'))
+    })
+  }
+  const last = () => scrollTo.mock.calls.at(-1)?.[0] as { top: number } | undefined
+
+  it('lands at the bottom when the thread first loads', async () => {
+    await show(fakeDeskApi({ history: async () => ({ events: history, more: false }) }))
+    await screen.findByText('what is up?')
+    expect(last()).toEqual({ top: 2000 })
+  })
+
+  it('follows content that grows without a new item, such as a streaming reply', async () => {
+    const { src } = await show(fakeDeskApi())
+    scrollTo.mockClear()
+    act(() => src.emit('partial', { kind: 'partial', text: 'a' }))
+    grow(2400)
+    expect(last()).toEqual({ top: 2400 })
+  })
+
+  it('stays put once the reader scrolls up, and shows a way back', async () => {
+    const { src } = await show(fakeDeskApi())
+    scrollTop(600)
+    scrollTo.mockClear()
+    act(() => src.emit('partial', { kind: 'partial', text: 'more' }))
+    grow(2600)
+    expect(scrollTo).not.toHaveBeenCalled()
+    expect(screen.getByRole('button', { name: 'Jump to latest' })).toBeInTheDocument()
+  })
+
+  it('stops following when the wheel goes up during a reply, before any scroll event', async () => {
+    const { src } = await show(fakeDeskApi())
+    act(() => src.emit('partial', { kind: 'partial', text: 'a' }))
+    act(() => {
+      window.dispatchEvent(new WheelEvent('wheel', { deltaY: -40 }))
+    })
+    scrollTo.mockClear()
+    grow(2500)
+    expect(scrollTo).not.toHaveBeenCalled()
+  })
+
+  it('follows again when the reader scrolls back to the bottom', async () => {
+    await show(fakeDeskApi())
+    scrollTop(600)
+    grow(2600)
+    scrollTo.mockClear()
+    scrollTop(1900) // 1900 + 700 = 2600
+    grow(2800)
+    expect(last()).toEqual({ top: 2800 })
+    expect(screen.queryByRole('button', { name: 'Jump to latest' })).not.toBeInTheDocument()
+  })
+
+  it('does not take its own scrolling, or growth under it, for the reader leaving', async () => {
+    await show(fakeDeskApi())
+    grow(2500) // we scroll to the bottom, which the browser reports as scrollY 1800...
+    scrollTo.mockClear()
+    height = 3000 // ...but more arrives before that scroll event is handled
+    scrollTop(1800)
+    grow(3000)
+    expect(last()).toEqual({ top: 3000 })
+  })
+
+  it('Jump to latest returns to the bottom and resumes following', async () => {
+    const user = userEvent.setup()
+    await show(fakeDeskApi())
+    scrollTop(500)
+    scrollTo.mockClear()
+    await user.click(screen.getByRole('button', { name: 'Jump to latest' }))
+    expect(last()).toEqual({ top: 2000 })
+    grow(2200)
+    expect(last()).toEqual({ top: 2200 })
+  })
+})
+
 describe('Markdown', () => {
   it('renders lists and fenced code as plain text inside elements', () => {
     const { container } = render(<Markdown text={'- a\n- `b`\n\n```\n<i>raw</i>\n```'} />)

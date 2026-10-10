@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode, type RefObject } from 'react'
 import type { DecisionView, DeskEvent } from '../api/types'
 import { EventGlyph, Glyph } from '../components/Glyph'
 import { since } from '../format'
@@ -127,6 +127,73 @@ const CONNECTION: Record<Connection, { text: string; cls: string; glyph: string 
   refused: { text: 'Refused', cls: 'is-down', glyph: '○' },
 }
 
+/** How close to the bottom, in px, still counts as being at it. */
+const NEAR_BOTTOM = 24
+
+/**
+ * Keeps the page at the bottom of the conversation while the reader is there. Content
+ * grows without a render of ours (markdown, a decision card, fonts, a streaming reply),
+ * so a ResizeObserver on `target` re-pins; `deps` re-pins on our own changes. The reader
+ * leaves by scrolling up (scrollY falls, or the wheel goes up) and returns by reaching the
+ * bottom. Our own scrolling and content growth never move scrollY up, so neither unpins.
+ */
+export function useFollowBottom(target: RefObject<HTMLElement | null>, deps: unknown[]) {
+  const pinned = useRef(true)
+  const lastY = useRef(0)
+  const [following, setFollowing] = useState(true)
+
+  const pin = useCallback((v: boolean) => {
+    if (pinned.current !== v) {
+      pinned.current = v
+      setFollowing(v)
+    }
+  }, [])
+  const toBottom = useCallback(() => {
+    const el = document.documentElement
+    window.scrollTo({ top: el.scrollHeight })
+    lastY.current = Math.max(0, el.scrollHeight - window.innerHeight)
+  }, [])
+  /** Back to the bottom, following again: the reader's own send, or "Jump to latest". */
+  const jump = useCallback(() => {
+    pin(true)
+    toBottom()
+  }, [pin, toBottom])
+
+  useEffect(() => {
+    const onScroll = () => {
+      const y = window.scrollY
+      if (window.innerHeight + y >= document.documentElement.scrollHeight - NEAR_BOTTOM) pin(true)
+      else if (y < lastY.current) pin(false)
+      lastY.current = y
+    }
+    const onWheel = (e: WheelEvent) => {
+      if (e.deltaY < 0) pin(false)
+    }
+    const onResize = () => {
+      if (pinned.current) toBottom()
+    }
+    lastY.current = window.scrollY
+    window.addEventListener('scroll', onScroll, { passive: true })
+    window.addEventListener('wheel', onWheel, { passive: true })
+    window.addEventListener('resize', onResize)
+    const ro = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(onResize)
+    if (target.current) ro?.observe(target.current)
+    return () => {
+      window.removeEventListener('scroll', onScroll)
+      window.removeEventListener('wheel', onWheel)
+      window.removeEventListener('resize', onResize)
+      ro?.disconnect()
+    }
+  }, [target, pin, toBottom])
+
+  useEffect(() => {
+    if (pinned.current) toBottom()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [toBottom, ...deps])
+
+  return { following, jump }
+}
+
 function useThread(thread: DeskThread): DeskSnapshot {
   return useSyncExternalStore(thread.subscribe, thread.getSnapshot)
 }
@@ -175,8 +242,7 @@ function ChatThread({
   const [confirming, setConfirming] = useState(false)
   const newButton = useRef<HTMLButtonElement>(null)
   const confirmButton = useRef<HTMLButtonElement>(null)
-  const end = useRef<HTMLDivElement>(null)
-  const pinned = useRef(true)
+  const root = useRef<HTMLDivElement>(null)
 
   const items = useMemo(() => timeline(d.events, live.feed), [d.events, live.feed])
   const open = useMemo(() => new Map(live.decisions.map((x) => [x.id, x])), [live.decisions])
@@ -184,16 +250,7 @@ function ChatThread({
   const shown = new Set(items.flatMap((it) => (it.type === 'feed' && it.f.event === 'decision_asked' ? [it.f.ref ?? 0] : [])))
   const unplaced = live.decisions.filter((x) => !shown.has(x.id))
 
-  useEffect(() => {
-    const onScroll = () => {
-      pinned.current = window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 120
-    }
-    window.addEventListener('scroll', onScroll, { passive: true })
-    return () => window.removeEventListener('scroll', onScroll)
-  }, [])
-  useEffect(() => {
-    if (pinned.current) end.current?.scrollIntoView({ block: 'end' })
-  }, [items.length, d.partial, unplaced.length])
+  const follow = useFollowBottom(root, [d.loaded, items.length, d.partial, unplaced.length])
   useEffect(() => {
     if (confirming) confirmButton.current?.focus()
   }, [confirming])
@@ -202,7 +259,7 @@ function ChatThread({
   const stopped = d.connection === 'signed-out' || d.connection === 'refused'
 
   return (
-    <div className="page chat">
+    <div ref={root} className="page chat">
       <header className="page-head chat-head">
         <h1>Chat</h1>
         <p className={`chat-conn live-dot ${conn.cls}`} role="status">
@@ -291,15 +348,22 @@ function ChatThread({
             <Markdown text={d.partial} />
           </div>
         )}
-        <div ref={end} />
       </div>
 
-      <Composer thread={thread} d={d} disabled={stopped} />
+      <Composer thread={thread} d={d} disabled={stopped} following={follow.following} onSend={follow.jump} />
     </div>
   )
 }
 
-function Composer({ thread, d, disabled }: { thread: DeskThread; d: DeskSnapshot; disabled: boolean }) {
+function Composer({
+  thread, d, disabled, following, onSend,
+}: {
+  thread: DeskThread
+  d: DeskSnapshot
+  disabled: boolean
+  following: boolean
+  onSend: () => void
+}) {
   const [text, setText] = useState('')
   const box = useRef<HTMLTextAreaElement>(null)
   const sending = d.sending
@@ -307,6 +371,7 @@ function Composer({ thread, d, disabled }: { thread: DeskThread; d: DeskSnapshot
   const send = async () => {
     if (sending || disabled || !text.trim()) return
     // The text stays until the daemon has taken it, so a refusal loses nothing.
+    onSend()
     if (await thread.send(text)) setText('')
     box.current?.focus()
   }
@@ -319,6 +384,11 @@ function Composer({ thread, d, disabled }: { thread: DeskThread; d: DeskSnapshot
         void send()
       }}
     >
+      {!following && (
+        <button type="button" className="button chat-jump" onClick={onSend}>
+          Jump to latest
+        </button>
+      )}
       {d.problem && (
         <p className="chat-problem tone-bad" role="alert">
           {d.problem.message}
