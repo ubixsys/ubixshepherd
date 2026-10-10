@@ -111,6 +111,15 @@ type Model struct {
 	deskCh    chan tea.Msg
 	pending   []string // events waiting for the desk to be free
 
+	// The `!` shell escape: the command in flight, its output so far, and the notes of
+	// finished commands for the desk's next message.
+	shell        ShellFunc
+	shellCancel  context.CancelFunc
+	shellCh      chan tea.Msg
+	shellLive    string
+	shellCommand string
+	shellNotes   []shellNote
+
 	lastFeed         int64
 	lanes            []api.LaneView
 	runs             []api.RunView // the latest, of every state
@@ -167,7 +176,7 @@ func New(ctx context.Context, a API, d Desk, ws store.Workspace) *Model {
 	now := time.Now()
 	return &Model{
 		ctx: ctx, api: a, desk: d, workspace: ws, HistoryItems: DefaultHistory, auto: true, input: in,
-		println: tea.Println, lastFeed: -1, lastActivity: now, clock: time.Now, tick: tea.Tick, focused: true,
+		println: tea.Println, shell: runShell, lastFeed: -1, lastActivity: now, clock: time.Now, tick: tea.Tick, focused: true,
 		seenUntil: now,
 	}
 }
@@ -518,6 +527,11 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 	case tea.KeyMsg:
 		cmds = append(cmds, m.noteActivity(m.clock()))
 		if msg.Type == tea.KeyCtrlC {
+			if m.shellCancel != nil {
+				// Ctrl-C stops the command, not the chat.
+				m.shellCancel()
+				return tea.Batch(cmds...)
+			}
 			return tea.Batch(append(cmds, m.quit())...)
 		}
 		if m.pager != nil {
@@ -619,6 +633,14 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		m.refreshPager()
 	case lineMsg:
 		m.add(Line(msg))
+	case shellChunkMsg:
+		m.shellLive += string(msg)
+		if len(m.shellLive) > 8192 {
+			m.shellLive = m.shellLive[len(m.shellLive)-8192:]
+		}
+		cmds = append(cmds, waitShell(m.shellCh))
+	case shellDoneMsg:
+		m.onShellDone(msg)
 	case modelMsg:
 		m.model = msg.setting
 		if msg.show {
@@ -714,9 +736,12 @@ func (m *Model) refreshPager() {
 
 // handle is what the person typed: a command, or a message for the desk.
 func (m *Model) handle(text string) tea.Cmd {
+	if strings.HasPrefix(text, "!") {
+		return m.runShellLine(text)
+	}
 	if !strings.HasPrefix(text, "/") {
 		m.add(Line{Kind: KindYou, Text: text})
-		return m.send(text)
+		return m.send(m.withShellNotes(text))
 	}
 	f := strings.Fields(text)
 	switch f[0] {
@@ -727,6 +752,7 @@ func (m *Model) handle(text string) tea.Cmd {
 			"/decisions   decisions waiting for you\n/log <run>   a run's live output (q to come back)\n" +
 			"/auto on|off   let swarm events reach the desk on their own (on)\n/new   start a new conversation with the desk\n" +
 			"/model [<name>|reset]   the desk's model: show it, set it, or go back to config.yaml\n" +
+			"!<command>   run a shell command yourself, in the workspace root; !@<lane> <command> runs it in that lane's worktree (!@<repo>/<lane> if the name is in several repos). Ctrl-C stops it. The desk never runs it; it is told the result with your next message. No editors or pagers.\n" +
 			"/quit   leave (Ctrl-C too)\n" +
 			"The dock above the input: what needs you, what is broken, to review, working, and done since you last looked. Ctrl-G clears done; opening a run's log does too.\n" +
 			"The conversation is printed into your terminal: scroll, search, select and copy there as usual.\n" +
@@ -1019,6 +1045,9 @@ func (m *Model) renderTranscript() string {
 				b.WriteString("\n")
 			}
 		}
+		if l.Full != "" {
+			l.Text = l.Full
+		}
 		b.WriteString(renderLine(l, m.width))
 	}
 	return b.String()
@@ -1063,6 +1092,7 @@ func (m *Model) View() string {
 		dock = dock[:1]
 	}
 	rows = append(rows, m.streaming(len(dock))...)
+	rows = append(rows, m.shellLiveRows(max(2, m.height-8-len(dock)))...)
 	rows = append(rows, m.statusLine())
 	rows = append(rows, dock...)
 	if deciding {

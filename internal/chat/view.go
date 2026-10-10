@@ -49,6 +49,8 @@ func renderLine(l Line, width int) string {
 		return hang(eventGlyph(l.Event)+" ", "  ", styleLines(styleEvent, tintAgents(wrapText(l.Text, w))))
 	case KindDecision:
 		return hang(eventGlyph(api.EventDecisionAsked)+" ", "  ", styleLines(styleDecision, wrapText(l.Text, w)))
+	case KindShell:
+		return hang(styleHead.Render("$")+" ", "  ", renderShell(l.Text, w))
 	case KindError:
 		return hang(styleError.Render("!")+" ", "  ", styleLines(styleError, wrapText(l.Text, w)))
 	}
@@ -172,4 +174,27 @@ func fmtUSD(usd, budget float64, day string) string {
 		s += fmt.Sprintf(" of $%.0f", budget)
 	}
 	return s
+}
+
+// renderShell styles a shell entry: the command, its output, and the exit line, which is
+// marked when the command failed.
+func renderShell(text string, w int) string {
+	lines := strings.Split(text, "\n")
+	// The first line is "$ <command>": the glyph is the hang's.
+	lines[0] = strings.TrimPrefix(lines[0], "$ ")
+	for i, l := range lines {
+		lines[i] = wrapText(l, w)
+	}
+	last := len(lines) - 1
+	for i, l := range lines {
+		switch {
+		case i == 0:
+			lines[i] = styleLines(styleHead, l)
+		case i == last && l != "exit 0":
+			lines[i] = styleLines(styleError, l)
+		default:
+			lines[i] = styleLines(styleInfo, l)
+		}
+	}
+	return strings.Join(lines, "\n")
 }
