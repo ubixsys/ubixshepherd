@@ -118,7 +118,7 @@ into that provider's prompt plus the rendered standards.
 The prompt never goes on an agent's command line. Anyone on the machine can read a
 process's arguments with `ps`, and a `pkill -f` pattern can match an agent through the
 words of its task and stop it. Shepherd writes the prompt to the agent's standard input
-instead: Claude Code, Copilot and Cursor each read it there when given no prompt argument.
+instead: Claude Code, Copilot, Cursor and OpenCode each read it there when given no prompt argument.
 The same holds for the front desk's turns and for questions to an adopted conversation.
 
 ### 3.4 Typed reports and a closed task state machine
@@ -378,7 +378,7 @@ or an organisation's: the same concept, with members and logins.
 An agent CLI like Claude Code already orchestrates its own subagents: the human holds one
 conversation, the CLI spawns helpers the human never sees, and only their results come
 back. Shepherd is that, **one level up**: the one conversation sits above whole agent
-systems (Claude Code, Cursor, Copilot, Gemini), each working in its own lane, and they
+systems (Claude Code, Cursor, Copilot, OpenCode, Gemini), each working in its own lane, and they
 talk to each other **through Shepherd**. Only what needs the human reaches the human.
 
 - **The voice is an agent; the control plane is not.** The conversation the human holds is
@@ -644,7 +644,7 @@ These feed [open-questions.md](open-questions.md):
   build and a path to a GUI. Webhook intake stays in uBixOps. See [v1.md](v1.md).
 - **Agent adapters.** Driving each provider's CLI headless is the uniform path; provider
   SDKs give richer control but differ per provider. v1 drives the CLIs, and the adapters
-  built so far are Claude Code, Copilot and Cursor; Gemini CLI, first proposed here, has
+  built so far are Claude Code, Copilot, Cursor and OpenCode; Gemini CLI, first proposed here, has
   none yet.
 - **Pack format.** Markdown with structured front matter, or a schema-first format that
   renders to Markdown.

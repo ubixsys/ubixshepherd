@@ -74,6 +74,7 @@ func newPalette(color bool) palette {
 		},
 		agents: map[string]lipgloss.TerminalColor{
 			"claude": c("25", "111"), "copilot": c("28", "78"), "cursor": c("130", "180"),
+			"opencode": c("97", "141"),
 		},
 	}
 	if !color {

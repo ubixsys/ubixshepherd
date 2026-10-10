@@ -8,12 +8,11 @@ uBixShepherd is in **active build**. M1 is complete; M2 is partly implemented, w
 workspace-wide leases and established real use still outstanding. M3 proofs and M5 dispatch
 are partly implemented; M4's MCP tools and terminal front desk are implemented; M6 has not
 started. The code includes per-repo scope leases, lane origins, tag reservations and import;
-Claude Code, Copilot and Cursor dispatch with configured permission modes and repo-level
+Claude Code, Copilot, Cursor and OpenCode dispatch with configured permission modes and repo-level
 push and merge autonomy; per-run costs, quota holds and routed requests; GitLab polling,
 merge closure and failed-pipeline handoffs; and `shepherd chat`. GitHub mirror proofs through
 publication, typed cross-repo work orders and triage, and the end-to-end cross-repo delivery
-criterion are not implemented. The web UI is a preview in `web/`, not yet served by the
-daemon.
+criterion are not implemented. The web UI in `web/` is served by the daemon and opened with `shepherd web`.
 v1's scope and stack were decided on 2026-10-01: a **Go** core (daemon, CLI, MCP server, HTTP
 API in one binary for Windows, macOS and Linux), the Fold and dispatch together, GitLab and
 GitHub, running over a workspace of repos, terminal first with a TypeScript web UI later.
@@ -58,9 +57,9 @@ Actions runs `make check` on Linux, macOS and (informational) Windows, and publi
   that way.
 - `shepherd mcp` (`internal/cli/mcp.go`) maps each MCP tool onto a CLI command and runs
   it with output captured. Add a tool by adding a command first, then its mapping.
-- `internal/dispatch` starts agents (`lane run`). Adapters for Claude Code, Copilot and
-  Cursor use the repo's `agent.permission_mode` (default `auto`), `agent.model` and push/merge
-  autonomy. `desk.model` and `/model` choose the front desk's model.
+- `internal/dispatch` starts agents (`lane run`). Adapters for Claude Code, Copilot,
+  Cursor and OpenCode (`docs/opencode.md`) use the repo's `agent.permission_mode` (default `auto`), `agent.model` and push/merge
+  autonomy; OpenCode ignores the permission mode and gets an explicit permission block. `desk.model` and `/model` choose the front desk's model.
   Agents can push when `autonomy.push: agent`; on GitLab, `autonomy.merge: agent` lets
   them arm merge-when-pipeline-succeeds, still subject to forge rules. `lane ship` is an
   explicit Shepherd ship for repos set to `push: shepherd`, after the repo gate passes;

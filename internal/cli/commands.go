@@ -56,7 +56,7 @@ func runStatus(ctx context.Context, env Env, args []string) error {
 		if sp.Budget > 0 {
 			line += fmt.Sprintf(" of a $%.2f daily budget", sp.Budget)
 		}
-		fmt.Fprintln(w, line+" (Claude reports dollars; Copilot credits at $"+fmt.Sprintf("%.2f", sp.CreditUSD)+"; Cursor reports nothing)")
+		fmt.Fprintln(w, line+" (Claude reports dollars; Copilot credits at $"+fmt.Sprintf("%.2f", sp.CreditUSD)+"; Cursor reports nothing; OpenCode, 0 on a local model)")
 	}
 	if len(st.Workspaces) == 0 {
 		fmt.Fprintln(w, "\nNo workspaces yet. Register one with: shepherd init ~/git")
