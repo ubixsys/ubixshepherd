@@ -40,6 +40,9 @@ type Line struct {
 	// Event is the swarm event a line from the feed reports, one of the api.Event*
 	// values; it picks the line's glyph and colour.
 	Event string
+	// Full is the whole text of an entry whose Text is cut for the thread (a shell
+	// command's output); the transcript shows it.
+	Full string
 }
 
 // DeskBrief is the front desk's standing instruction, given once per conversation.
