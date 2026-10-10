@@ -41,6 +41,8 @@ type principal struct {
 	// agent session, for the origin of what it opens.
 	Human   bool
 	Session string
+	// web is a browser's session (RoleWeb).
+	web *webSession
 }
 
 type principalKey struct{}
@@ -124,19 +126,34 @@ func (s *Server) URL() string {
 	return ""
 }
 
-// auth finds who a request is from: the operator token, or a scoped token minted since
-// the daemon started.
+// auth finds who a request is from: the operator token, a scoped token minted since the
+// daemon started, or, with no token, a browser's session cookie (web.go). A request with
+// a token never counts its cookie, and is refused when a browser sent it from another
+// origin.
 func (s *Server) auth(next http.Handler) http.Handler {
 	want := []byte("Bearer " + s.Token)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		got := r.Header.Get("Authorization")
 		var p principal
-		if subtle.ConstantTimeCompare([]byte(got), want) == 1 {
+		if got == "" {
+			var err error
+			if p, err = s.webPrincipal(r); err != nil {
+				writeError(w, http.StatusForbidden, err)
+				return
+			}
+		} else if o := r.Header.Get("Origin"); o != "" && !sameOrigin(r) {
+			writeError(w, http.StatusForbidden, fmt.Errorf("a request from %s cannot use a token here", o))
+			return
+		} else if subtle.ConstantTimeCompare([]byte(got), want) == 1 {
 			p = principal{Role: RoleOperator}
 		} else if tok, ok := strings.CutPrefix(got, "Bearer "); ok && tok != "" {
 			if p, ok = s.tokens.lookup(tok); !ok {
 				p = principal{}
 			}
+		}
+		if p.Role == "" && got == "" {
+			writeError(w, http.StatusUnauthorized, errors.New("not signed in: run shepherd web for a sign-in link"))
+			return
 		}
 		if p.Role == "" {
 			writeError(w, http.StatusUnauthorized, errors.New("missing, wrong or revoked token"))
@@ -160,6 +177,8 @@ const (
 	forWorker
 	// ownRun: a worker only for the run named by the path's {id}.
 	ownRun
+	// forWeb: a browser session may call it, as it may every forDesk route.
+	forWeb
 )
 
 // guard refuses a request from a role the route is not for, before its handler runs.
@@ -171,6 +190,11 @@ func guard(a access, h http.HandlerFunc) http.HandlerFunc {
 		case RoleDesk:
 			if a&forDesk == 0 {
 				writeError(w, http.StatusForbidden, errors.New("the front desk's token cannot do this; it is the person's"))
+				return
+			}
+		case RoleWeb:
+			if a&(forDesk|forWeb) == 0 {
+				writeError(w, http.StatusForbidden, errors.New("a browser session cannot do this; use the shepherd command"))
 				return
 			}
 		case RoleWorker:

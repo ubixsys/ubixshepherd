@@ -9,9 +9,29 @@ PRODUCT_PATTERN := ubixcore|ubixvault|ubixops|replikate|ubixos
 
 PREFIX ?= $(HOME)/.local/bin
 
-.PHONY: build install test check core-boundary cross dist release-notes clean
+# Go packages: web/node_modules can hold Go code of its own, which is not ours to check.
+GO_PKGS := ./cmd/... ./internal/...
 
-build:
+# The built web UI is embedded from here (internal/webui). Only its .gitignore is tracked.
+WEBUI_DIR := internal/webui/app
+
+.PHONY: build web install test check core-boundary cross dist release-notes clean
+
+# Build the web UI (web/) into the binary. It needs Node 22 or later; without npm, or
+# with NO_WEB=1, the binary builds without a fresh UI and serves whatever is in
+# $(WEBUI_DIR), or a page saying the UI is not built.
+web:
+	@if [ -n "$(NO_WEB)" ]; then \
+		echo "NO_WEB is set: not building the web UI"; \
+	elif command -v npm >/dev/null 2>&1; then \
+		(cd web && { [ -d node_modules ] || npm ci --no-audit --no-fund; } && npm run build) || exit 1; \
+		find $(WEBUI_DIR) -mindepth 1 -maxdepth 1 ! -name .gitignore -exec rm -rf {} + && \
+		cp -R web/dist/. $(WEBUI_DIR)/ && echo "web UI built into $(WEBUI_DIR)"; \
+	else \
+		echo "npm not found: building without a fresh web UI (needs Node 22 or later)"; \
+	fi
+
+build: web
 	CGO_ENABLED=0 go build -ldflags '$(LDFLAGS)' -o bin/shepherd ./cmd/shepherd
 
 # Copy the binary to a stable path (the one `shepherd daemon install` should register),
@@ -27,12 +47,12 @@ install: build
 	fi
 
 test:
-	go test ./...
+	go test $(GO_PKGS)
 
 check: core-boundary
-	@test -z "$$(gofmt -l .)" || { echo "gofmt needed:"; gofmt -l .; exit 1; }
-	go vet ./...
-	go test ./...
+	@test -z "$$(gofmt -l cmd internal)" || { echo "gofmt needed:"; gofmt -l cmd internal; exit 1; }
+	go vet $(GO_PKGS)
+	go test $(GO_PKGS)
 
 core-boundary:
 	@if grep -rniE '$(PRODUCT_PATTERN)' $(CORE_DIRS); then \
@@ -40,7 +60,7 @@ core-boundary:
 	fi
 	@echo "Core is product-free."
 
-cross:
+cross: web
 	@for t in $(TARGETS); do \
 		os=$${t%/*}; arch=$${t#*/}; ext=; [ $$os = windows ] && ext=.exe; \
 		echo "build $$os/$$arch"; \
@@ -81,4 +101,5 @@ release-notes:
 		END { if (!found) { print "CHANGELOG.md has no section for " v > "/dev/stderr"; exit 1 } }' CHANGELOG.md
 
 clean:
-	rm -rf bin dist
+	rm -rf bin dist web/dist
+	find $(WEBUI_DIR) -mindepth 1 -maxdepth 1 ! -name .gitignore -exec rm -rf {} +
