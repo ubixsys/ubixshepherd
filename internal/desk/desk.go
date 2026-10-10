@@ -543,10 +543,12 @@ func (d *Desk) run(t turn) {
 		add(store.DeskError, "the desk: "+redact.String(err.Error()))
 		end("failed")
 	default:
-		end("done")
+		// The agent has exited: rotate before the turn is seen to end, so the next turn
+		// finds the session already ended.
 		if why := rotateWhy(o.Config().Desk, tokens, total); why != "" {
 			d.rotate(bg, gen, session, why)
 		}
+		end("done")
 	}
 }
 
