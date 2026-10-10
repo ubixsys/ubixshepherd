@@ -17,6 +17,10 @@ var ErrNotFound = errors.New("not found")
 // ErrConflict is returned when a write collides with something already there.
 var ErrConflict = errors.New("conflict")
 
+// ErrSelfApproval is returned when a brief is approved by whoever drafted it. It is a
+// conflict: the draft is left as it was.
+var ErrSelfApproval = fmt.Errorf("%w: a draft cannot be approved by its drafter", ErrConflict)
+
 // Lane states.
 const (
 	// LaneOpening: recorded, branch and worktree being created.
@@ -237,11 +241,32 @@ const (
 	RequestClosed = "closed"
 )
 
-// Request is one agent asking, through Shepherd, for something from another lane.
+// Request kinds. The first three are between lanes; the last three are the typed kinds
+// of a request addressed to a project (see docs/projects.md).
+const (
+	RequestQuestion = "question"
+	RequestHandoff  = "handoff"
+	RequestReview   = "review"
+	RequestBug      = "bug"
+	RequestFeature  = "feature"
+	RequestNotice   = "notice"
+)
+
+// Request is one agent asking, through Shepherd, for something from another lane, or
+// from another project.
 type Request struct {
 	ID      int64  `json:"id"`
 	FromRun int64  `json:"from_run"`
-	Kind    string `json:"kind"` // question, handoff, review
+	Kind    string `json:"kind"` // question, handoff, review; bug, feature, notice to a project
+	// Project is the receiving project of a request addressed to a project, and
+	// FromProject the asker's; Evidence, Touches and Version are its typed fields, which
+	// intake rules match on. All are empty on a request between lanes, and on every
+	// request recorded before projects existed.
+	Project     string   `json:"project,omitempty"`
+	FromProject string   `json:"from_project,omitempty"`
+	Evidence    []string `json:"evidence,omitempty"`
+	Touches     []string `json:"touches,omitempty"`
+	Version     string   `json:"version,omitempty"`
 	// Lane is the target lane's name, once known.
 	Lane    string `json:"lane,omitempty"`
 	Message string `json:"message"`
@@ -463,6 +488,65 @@ type RunHistory struct {
 	Lanes  []HistoryLane
 }
 
+// Brief states.
+const (
+	// BriefDraft: written, waiting for the person. Never given to an agent.
+	BriefDraft = "draft"
+	// BriefApproved: the project's current brief. At most one per project.
+	BriefApproved = "approved"
+	// BriefSuperseded: replaced by a later approval, or by a newer draft before it was
+	// approved. Kept as history.
+	BriefSuperseded = "superseded"
+)
+
+// ProjectBrief is a project's goal and current focus: text with an author and an approval.
+type ProjectBrief struct {
+	ID      int64  `json:"id"`
+	Project string `json:"project"`
+	Text    string `json:"text"`
+	State   string `json:"state"`
+	// DraftedBy and ApprovedBy name who did it, as the caller identifies them (the desk,
+	// a run as "run:<id>", the person). The two must differ.
+	DraftedBy  string     `json:"drafted_by"`
+	ApprovedBy string     `json:"approved_by,omitempty"`
+	Created    time.Time  `json:"created"`
+	Approved   *time.Time `json:"approved,omitempty"`
+}
+
+// RepoSpend is what the runs in one repo cost over a range of days.
+type RepoSpend struct {
+	RepoID  int64   `json:"repo_id"`
+	Repo    string  `json:"repo"`
+	Runs    int64   `json:"runs"`
+	USD     float64 `json:"usd"`
+	Credits float64 `json:"credits,omitempty"`
+}
+
+// SpendRollup is a range of days' spend split into what a budget needs: each repo (the
+// caller sums a project's members), the front desk as its own line, and what belongs to
+// neither. Every entry of the range is in exactly one part, so the parts sum to the
+// workspace total. The store knows no projects; membership is configuration.
+type SpendRollup struct {
+	From string `json:"from"`
+	To   string `json:"to"`
+	// Repos has one entry for each repo that has a run's cost in the range, ordered by name.
+	Repos []RepoSpend `json:"repos,omitempty"`
+	// Desk is the front desk's spend. It is charged to no repo.
+	Desk Spend `json:"desk"`
+	// Other is spend with no repo and not the desk's: an adopted session's cost.
+	Other Spend `json:"other"`
+}
+
+// Total is the whole range's spend in dollars and credits.
+func (r SpendRollup) Total() (usd, credits float64) {
+	usd, credits = r.Desk.USD+r.Other.USD, r.Desk.Credits+r.Other.Credits
+	for _, rs := range r.Repos {
+		usd += rs.USD
+		credits += rs.Credits
+	}
+	return usd, credits
+}
+
 // Store is Shepherd's state.
 type Store interface {
 	// SaveWorkspace creates the workspace at ws.Path, or renames the one already there,
@@ -530,6 +614,25 @@ type Store interface {
 	// event with its sequence number and time. A user or system message with no Turn
 	// starts one: its Turn is its own Seq.
 	AddDeskEvent(ctx context.Context, e DeskEvent) (DeskEvent, error)
+	// SaveBriefDraft records a draft brief for a project. An earlier draft that was never
+	// approved becomes superseded, so a project has at most one open draft.
+	SaveBriefDraft(ctx context.Context, project, text, draftedBy string) (ProjectBrief, error)
+	// ApproveBrief approves a draft and supersedes the project's previous approved brief,
+	// in one step. ErrNotFound for an unknown id; ErrConflict if it is not a draft;
+	// ErrSelfApproval if approvedBy is empty or is who drafted it.
+	ApproveBrief(ctx context.Context, id int64, approvedBy string) (ProjectBrief, error)
+	ProjectBrief(ctx context.Context, id int64) (ProjectBrief, error)
+	// ApprovedBrief returns a project's approved brief; ErrNotFound if it has none.
+	ApprovedBrief(ctx context.Context, project string) (ProjectBrief, error)
+	// PendingBrief returns a project's open draft; ErrNotFound if it has none.
+	PendingBrief(ctx context.Context, project string) (ProjectBrief, error)
+	// BriefHistory returns a project's briefs of every state, newest first.
+	BriefHistory(ctx context.Context, project string) ([]ProjectBrief, error)
+
+	// SpendRollup splits the spend of the days from to to inclusive ("2006-01-02") by repo,
+	// the desk and the rest.
+	SpendRollup(ctx context.Context, from, to string) (SpendRollup, error)
+
 	// DeskEvents returns a workspace's desk events after seq, oldest first.
 	DeskEvents(ctx context.Context, workspaceID, after int64, limit int) ([]DeskEvent, error)
 	// DeskHistory returns up to limit of a workspace's desk events before seq (0 for
