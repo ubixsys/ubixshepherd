@@ -1,4 +1,4 @@
-import { age, since, duration, usd, runCost, clockTime, shortSha } from './format'
+import { age, since, duration, usd, runCost, clockTime, shortSha, tokens } from './format'
 
 // Test age function
 describe('age', () => {
@@ -192,5 +192,16 @@ describe('shortSha', () => {
   it('should return first 8 characters of SHA', () => {
     expect(shortSha('1234567890abcdef')).toBe('12345678')
     expect(shortSha('1234567')).toBe('1234567')
+  })
+})
+describe('tokens', () => {
+  it('abbreviates counts', () => {
+    expect(tokens(0)).toBe('0')
+    expect(tokens(850)).toBe('850')
+    expect(tokens(12_300)).toBe('12.3k')
+    expect(tokens(412_000)).toBe('412k')
+    expect(tokens(200_000)).toBe('200k')
+    expect(tokens(1_800_000)).toBe('1.8M')
+    expect(tokens(18_400_000)).toBe('18M')
   })
 })

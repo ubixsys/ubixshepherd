@@ -273,3 +273,43 @@ export interface RunHistory {
   agents: string[]
   lanes: { id: number; repo: string; name: string }[]
 }
+
+/** What a set of usage records add up to (store.UsageTotals). Tokens, peak and over_200k cover the measured records only. */
+export interface UsageTotals {
+  count: number
+  measured: number
+  input_tokens: number
+  cache_read_tokens: number
+  cache_creation_tokens: number
+  output_tokens: number
+  /** The largest single request's prompt of any record. */
+  peak_context: number
+  /** Records whose peak went past 200,000 tokens. */
+  over_200k: number
+  /** The largest window reported in the set; absent when none said. */
+  context_window?: number
+  compactions: number
+  cost_usd: number
+  credits?: number
+}
+
+/** One agent and model, or one lane. */
+export interface UsageGroup extends UsageTotals {
+  key: string
+  agent?: string
+  model?: string
+  repo?: string
+  lane?: string
+}
+
+/** GET /v1/usage: a range of local days, inclusive. */
+export interface UsageStats {
+  from: string
+  to: string
+  total: UsageTotals
+  runs: UsageTotals
+  desk: UsageTotals
+  by_model?: UsageGroup[]
+  by_lane?: UsageGroup[]
+  desk_by_model?: UsageGroup[]
+}

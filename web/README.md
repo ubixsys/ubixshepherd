@@ -53,6 +53,24 @@ list open lanes and the newest 200 runs:
 The daemon does not record whether a close was forced, so a lane's outcome is the forge's
 last word on its merge request.
 
+## Usage
+
+The **Usage** page answers whether a 1M-context model is worth its cost, from
+`GET /v1/usage?from=DAY&to=DAY` (see [usage-stats.md](../docs/usage-stats.md)). Its range is
+**Today**, **Last 7 days** (the default), **Last 30 days** or **Custom** with two day pickers,
+and is in the address (`#/usage?range=custom&from=2026-10-01&to=2026-10-07`). It shows:
+
+- tiles: total cost, the desk's cost against the agents', runs and turns, and how many
+  records peaked over 200k;
+- a chart of the largest context each agent and model, desk model and lane reached, against
+  a line at 200k and a tick at the model's window when it fits the scale;
+- sortable tables by agent and model, for the front desk and by lane, with tokens (input,
+  cache read, cache write, output), peak context, compactions and cost.
+
+The endpoint answers totals per group, not per record, so the chart shows each group's
+largest peak and how many of its records went over 200k, not one mark per run. Copilot and
+Cursor runs carry cost only and are left out of the chart.
+
 ## Build and develop it
 
 You need Node 22 or later. `make build` at the repo root builds the app and embeds it in

@@ -4,7 +4,7 @@
 // `shepherd web` opens). Nothing here ever holds a token. A cookie session's writes carry
 // its CSRF token, read once from /v1/web/session.
 import type {
-  Decision, DecisionView, Feed, LaneRecord, LaneView, RequestView, RunEvents, RunHistory, RunLog, RunView, SpendToday, Status,
+  Decision, DecisionView, Feed, LaneRecord, LaneView, RequestView, RunEvents, RunHistory, RunLog, RunView, SpendToday, Status, UsageStats,
 } from './types'
 
 export class ApiError extends Error {
@@ -121,3 +121,6 @@ export const history = {
       `/v1/history/runs?${qs({ workspace_id: workspaceId, since, ...(agent ? { agent } : {}), ...(laneId ? { lane_id: laneId } : {}) })}`,
     ),
 }
+
+/** Tokens and context sizes of the daemon's runs and desk turns over a range of local days ("2006-01-02", inclusive). */
+export const usage = (from: string, to: string) => get<UsageStats>(`/v1/usage?${qs({ from, to })}`)

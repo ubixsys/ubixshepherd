@@ -4,10 +4,14 @@ import { useSyncExternalStore } from 'react'
 /** The time filter on the history views. */
 export type Range = 'today' | 'week'
 
+/** The usage page's range: three presets and a custom pair of days. */
+export type UsageRange = 'today' | 'week' | 'month' | 'custom'
+
 export type Route =
   | { page: 'board'; range?: Range }
   | { page: 'runs'; range?: Range; agent?: string; lane?: number }
   | { page: 'decisions'; focus?: number }
+  | { page: 'usage'; range?: UsageRange; from?: string; to?: string }
   | { page: 'chat' }
   | { page: 'lane'; id: number }
   | { page: 'log'; run: number }
@@ -31,6 +35,19 @@ export function parse(hash: string): Route {
     const d = Number(q.get('d'))
     return d > 0 ? { page: 'decisions', focus: d } : { page: 'decisions' }
   }
+  if (path === '/usage') {
+    const r = q.get('range')
+    const usageRange = r === 'today' || r === 'week' || r === 'month' || r === 'custom' ? r : undefined
+    const day = /^\d{4}-\d{2}-\d{2}$/
+    const from = q.get('from') ?? ''
+    const to = q.get('to') ?? ''
+    return {
+      page: 'usage',
+      ...(usageRange ? { range: usageRange } : {}),
+      ...(usageRange === 'custom' && day.test(from) ? { from } : {}),
+      ...(usageRange === 'custom' && day.test(to) ? { to } : {}),
+    }
+  }
   if (path === '/chat') return { page: 'chat' }
   let m = /^\/lanes\/(\d+)$/.exec(path)
   if (m) return { page: 'lane', id: Number(m[1]) }
@@ -49,6 +66,15 @@ export const href = {
     return q.size ? `#/runs?${q}` : '#/runs'
   },
   decisions: (focus?: number) => (focus ? `#/decisions?d=${focus}` : '#/decisions'),
+  usage: (o: { range?: UsageRange; from?: string; to?: string } = {}) => {
+    const q = new URLSearchParams()
+    if (o.range) q.set('range', o.range)
+    if (o.range === 'custom') {
+      if (o.from) q.set('from', o.from)
+      if (o.to) q.set('to', o.to)
+    }
+    return q.size ? `#/usage?${q}` : '#/usage'
+  },
   chat: () => '#/chat',
   lane: (id: number) => `#/lanes/${id}`,
   log: (run: number) => `#/runs/${run}/log`,
