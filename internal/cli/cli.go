@@ -70,6 +70,8 @@ func commands() []command {
 		{"lane", "Open, list and close lanes: a branch and worktree per stream of work",
 			"shepherd lane open <name> --scope '<globs>' [--branch B] [--repo R] | list [--all] [--json] | close [name] [--force] | scope [lane] --add G --remove G | review [--repo R] [--only V] | ship [lane] [--repo R] | run [lane] --agent claude|copilot|cursor|opencode [--model M] [--new] [--detach] \"task\"", runLane},
 		{"run", "Agent runs: list, show, follow, continue, attach to and stop them", "shepherd run list [--all] | show <id> | logs [-f] <id> | continue <id> \"message\" [--detach] | attach <id> | stop <id>", runRun},
+		{"stats", "Tokens, context sizes and cost over a range of days: by agent and model, by lane, and the front desk",
+			"shepherd stats [--days N | --from DAY --to DAY] [--json]", runStats},
 		{"hook", "Install or check the pre-push hook that keeps a lane's pushes in its scope",
 			"shepherd hook install | uninstall | status [--repo R]", runHook},
 		{"fold", "Import lanes from a coordination file, keep its view, and find stale worktrees",

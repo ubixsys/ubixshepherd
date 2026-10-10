@@ -213,6 +213,28 @@ func mcpTools() []mcpTool {
 			more: "The whole log, redacted, is the file on the log line near the top: Read it with an offset and a limit, for the part you need.",
 		},
 		{
+			Name: "usage_stats",
+			Description: "Tokens, context sizes and cost over a range of days: agent runs by agent and model, by lane, and the front desk's turns. " +
+				"Peak context is the largest single request's prompt in a run or turn; the count over 200k shows whether a 1M-context model was ever needed. Default: the last 7 days.",
+			InputSchema: obj(map[string]any{
+				"days": map[string]any{"type": "integer", "description": "The last N days, today included. Default 7."},
+				"from": map[string]any{"type": "string", "description": "First day, YYYY-MM-DD (instead of days)."},
+				"to":   map[string]any{"type": "string", "description": "Last day, YYYY-MM-DD. Default today."},
+			}),
+			args: func(a map[string]any) ([]string, error) {
+				out := []string{"stats"}
+				if from := str(a, "from"); from != "" {
+					out = append(out, "--from", from)
+				} else if d, ok := a["days"].(float64); ok {
+					out = append(out, "--days", fmt.Sprint(int(d)))
+				}
+				if to := str(a, "to"); to != "" {
+					out = append(out, "--to", to)
+				}
+				return out, nil
+			},
+		},
+		{
 			Name:        "run_stop",
 			Description: "Stop a running agent. Its commits so far stay in the lane.",
 			InputSchema: obj(map[string]any{"id": map[string]any{"type": "integer"}}, "id"),
