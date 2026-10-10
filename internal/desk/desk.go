@@ -46,7 +46,10 @@ type Options struct {
 	Model func(ctx context.Context) string
 	// Wake is desk.wake: config.WakeAttached, WakeAlways or WakeNever.
 	Wake func() string
-	Log  *slog.Logger
+	// Config is the live configuration: desk.rotate_*, desk.summary_* and
+	// desk.tool_output_chars, and the repos' standing rules for the summary.
+	Config func() config.Config
+	Log    *slog.Logger
 	// Grace is how long after the last client leaves the desk still wakes on its own.
 	Grace time.Duration
 	// QueueMax bounds the turns waiting; DigestMax the events waiting for a client.
@@ -54,6 +57,20 @@ type Options struct {
 	// Keep is how many events each workspace's conversation keeps.
 	Keep int
 }
+
+// FeedRotated is the feed kind for a desk session rotated: ended at a turn's end once it
+// grew past desk.rotate_tokens or desk.rotate_cost, the next turn starting a new one
+// seeded with a summary.
+const FeedRotated = "desk_rotated"
+
+// Noter is an Agent that can also write the notes paragraph of a summary
+// (desk.summary_model).
+type Noter interface {
+	Notes(ctx context.Context, model, dir, prompt string) (string, float64, error)
+}
+
+// notesTimeout bounds the notes call: the summary does without them.
+const notesTimeout = 90 * time.Second
 
 // Defaults.
 const (
@@ -96,6 +113,9 @@ func NewManager(o Options) *Manager {
 	}
 	if o.Wake == nil {
 		o.Wake = func() string { return config.WakeAttached }
+	}
+	if o.Config == nil {
+		o.Config = config.Default
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Manager{o: o, ctx: ctx, cancel: cancel, desks: map[int64]*Desk{}}
@@ -446,12 +466,18 @@ func (d *Desk) run(t turn) {
 
 	session := d.Session(bg)
 	fresh := session == ""
+	seed := ""
 	if fresh {
 		var err error
 		if session, err = newUUID(); err != nil {
 			add(store.DeskError, err.Error())
 			end("failed")
 			return
+		}
+		// A new session after earlier turns, rotated or started by the person, starts
+		// from a summary.
+		if seed, err = d.seed(ctx, t.id); err != nil {
+			o.Log.Error("desk: build the summary", "workspace", d.ws.Name, "err", err)
 		}
 	}
 	tok, err := o.Tokens.MintDesk(t.origin == store.DeskByHuman, session)
@@ -464,13 +490,18 @@ func (d *Desk) run(t turn) {
 
 	var partial strings.Builder
 	produced := false
+	tokens, total := 0, 0.0
 	emit := func(l Line) {
 		switch l.Kind {
+		case KindUsage:
+			tokens, _ = strconv.Atoi(l.Text)
+			return
 		case KindPartial:
 			partial.WriteString(l.Text)
 			d.live(store.DeskEvent{WorkspaceID: d.ws.ID, Kind: KindPartial, Text: l.Text, Turn: t.id, Origin: t.origin, Created: time.Now().UTC()})
 			return
 		case store.DeskCost:
+			total, _ = strconv.ParseFloat(l.Text, 64)
 			d.cost(bg, session, l.Text, add)
 			return
 		}
@@ -479,6 +510,7 @@ func (d *Desk) run(t turn) {
 		add(l.Kind, redact.String(l.Text))
 	}
 	model := o.Model(bg)
+	cfg := o.Config().Desk
 	message := t.text
 	d.mu.Lock()
 	if d.carry != "" && !fresh {
@@ -487,7 +519,7 @@ func (d *Desk) run(t turn) {
 	d.carry = ""
 	d.mu.Unlock()
 	err = o.Agent.Turn(ctx, Spec{Session: session, New: fresh, Message: message, Dir: d.ws.Path, Model: model,
-		Env: []string{dispatch.EnvToken + "=" + tok, dispatch.EnvURL + "=" + o.Tokens.URL()}}, emit)
+		Env: []string{dispatch.EnvToken + "=" + tok, dispatch.EnvURL + "=" + o.Tokens.URL()}, Seed: seed, ToolChars: cfg.ToolOutputCap()}, emit)
 	if rest := strings.TrimSpace(partial.String()); rest != "" {
 		// The stream ended without the whole reply: keep what came.
 		add(store.DeskAssistant, redact.String(rest))
@@ -512,7 +544,85 @@ func (d *Desk) run(t turn) {
 		end("failed")
 	default:
 		end("done")
+		if why := rotateWhy(o.Config().Desk, tokens, total); why != "" {
+			d.rotate(bg, gen, session, why)
+		}
 	}
+}
+
+// rotateWhy says why a session that has just finished a turn should end, or "".
+func rotateWhy(c config.Desk, tokens int, total float64) string {
+	if at := c.RotateAt(); at > 0 && tokens > at {
+		return fmt.Sprintf("its context reached %d tokens (desk.rotate_tokens %d)", tokens, at)
+	}
+	if usd := c.RotateUSD(); usd > 0 && total > usd {
+		return fmt.Sprintf("it has cost $%.2f (desk.rotate_cost $%.2f)", total, usd)
+	}
+	return ""
+}
+
+// rotate ends the session at the end of a turn: the next turn, queued or still to come,
+// starts a new one seeded with a summary. The thread, the queue and the swarm's waiting
+// events are left as they are.
+func (d *Desk) rotate(ctx context.Context, gen int, session, why string) {
+	o := d.m.o
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	// A new conversation started meanwhile has already ended this session.
+	if d.gen != gen {
+		return
+	}
+	if cur, _ := o.Store.Setting(ctx, settingSession(d.ws.ID)); cur != session {
+		return
+	}
+	if err := o.Store.SetSetting(ctx, settingSession(d.ws.ID), ""); err != nil {
+		o.Log.Error("desk: rotate", "workspace", d.ws.Name, "err", err)
+		return
+	}
+	o.Log.Info("desk: rotated its session", "workspace", d.ws.Name, "why", why)
+	text := fmt.Sprintf("front desk (%s): started a new session, seeded with a summary, because %s", d.ws.Name, why)
+	if err := o.Store.AddFeed(ctx, FeedRotated, text, d.ws.ID); err != nil {
+		o.Log.Error("desk: record the rotation", "err", err)
+	}
+}
+
+// seed is the summary a new session starts from, or "" when the conversation has no
+// earlier turn to continue.
+func (d *Desk) seed(ctx context.Context, turn int64) (string, error) {
+	earlier, err := d.m.o.Store.DeskHistory(ctx, d.ws.ID, turn, 1)
+	if err != nil || len(earlier) == 0 {
+		return "", err
+	}
+	in, err := d.gather(ctx, turn)
+	if err != nil {
+		return "", err
+	}
+	c := in.cfg.Desk
+	return in.render(c.SummaryCap(), d.notes(ctx, c.SummaryModel, in)), nil
+}
+
+// notes asks desk.summary_model for a paragraph on the conversation's open threads, from
+// the summary's own records and quoted turns. Any failure leaves them out.
+func (d *Desk) notes(ctx context.Context, model string, in summaryInput) string {
+	o := d.m.o
+	n, ok := o.Agent.(Noter)
+	if model == "" || !ok {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(ctx, notesTimeout)
+	defer cancel()
+	prompt := "Below is a summary of the state of a coordinator's work and the last turns of its conversation with a person. " +
+		"Write one short paragraph (at most 120 words) of notes for the coordinator's successor: what the person is trying to get done, " +
+		"commitments made and not yet kept, and open threads. Facts only, no advice, no greeting, no headings.\n\n" + in.render(in.cfg.Desk.SummaryCap(), "")
+	text, usd, err := n.Notes(ctx, model, d.ws.Path, prompt)
+	if usd > 0 {
+		d.spend(context.WithoutCancel(ctx), usd)
+	}
+	if err != nil {
+		o.Log.Warn("desk: the summary's notes", "workspace", d.ws.Name, "err", err)
+		return ""
+	}
+	return redact.String(text)
 }
 
 // cost records what the turn added to the session's cost. Claude Code reports the
@@ -535,7 +645,15 @@ func (d *Desk) cost(ctx context.Context, session, total string, add func(kind, t
 	if delta <= 0 {
 		return
 	}
-	sp := store.Spend{Source: store.OriginDesk, USD: delta}
+	d.spend(ctx, delta)
+	add(store.DeskCost, strconv.FormatFloat(delta, 'f', -1, 64))
+}
+
+// spend records what the desk cost.
+func (d *Desk) spend(ctx context.Context, usd float64) {
+	o := d.m.o
+	sp := store.Spend{Source: store.OriginDesk, USD: usd}
+	var err error
 	if o.Spend != nil {
 		err = o.Spend(ctx, sp)
 	} else {
@@ -545,7 +663,6 @@ func (d *Desk) cost(ctx context.Context, session, total string, add func(kind, t
 	if err != nil {
 		o.Log.Error("desk: record spend", "err", err)
 	}
-	add(store.DeskCost, strconv.FormatFloat(delta, 'f', -1, 64))
 }
 
 func (d *Desk) append(ctx context.Context, e store.DeskEvent) (store.DeskEvent, error) {

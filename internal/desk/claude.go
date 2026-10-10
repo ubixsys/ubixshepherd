@@ -28,7 +28,11 @@ import (
 // never stored: the whole reply follows as a store.DeskAssistant event.
 const KindPartial = "partial"
 
-// Line is one thing a turn produced: a store.Desk* kind, or KindPartial.
+// KindUsage is the context the agent's last model call read, in tokens (its input and
+// cache tokens), for rotation. Never stored.
+const KindUsage = "usage"
+
+// Line is one thing a turn produced: a store.Desk* kind, KindPartial or KindUsage.
 type Line struct {
 	Kind string
 	Text string
@@ -44,6 +48,12 @@ type Spec struct {
 	Dir, Model string
 	// Env is added to the agent's environment: the desk's token and the daemon's URL.
 	Env []string
+	// Seed is the summary a new session starts from, "" for none: it goes before the
+	// message, and the brief says the session is a continuation.
+	Seed string
+	// ToolChars caps what each operator tool returns to the desk; 0 leaves the tools'
+	// own cap.
+	ToolChars int
 }
 
 // Agent runs a turn and calls emit for each line as it streams.
@@ -74,12 +84,20 @@ type Claude struct {
 // operator tools' server inherits it from the environment, and --scoped makes that
 // server refuse to start without one rather than fall back to daemon.json.
 func (c Claude) Args(s Spec) []string {
+	served := []string{"mcp", "--scoped"}
+	if s.ToolChars > 0 {
+		served = append(served, "--max-output", strconv.Itoa(s.ToolChars))
+	}
 	mcp, _ := json.Marshal(map[string]any{"mcpServers": map[string]any{
-		"shepherd": map[string]any{"command": c.Shepherd, "args": []string{"mcp", "--scoped"}},
+		"shepherd": map[string]any{"command": c.Shepherd, "args": served},
 	}})
 	a := []string{"-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages"}
 	if s.New {
-		a = append(a, "--session-id", s.Session, "--append-system-prompt", Brief)
+		brief := Brief
+		if s.Seed != "" {
+			brief += "\n\n" + Continuation
+		}
+		a = append(a, "--session-id", s.Session, "--append-system-prompt", brief)
 	} else {
 		a = append(a, "--resume", s.Session)
 	}
@@ -93,6 +111,14 @@ func (c Claude) Args(s Spec) []string {
 	return a
 }
 
+// Input is what the turn writes to the agent: the seed, if any, then the message.
+func (s Spec) Input() string {
+	if s.Seed == "" {
+		return s.Message
+	}
+	return s.Seed + "\n\n" + s.Message
+}
+
 // Turn runs one turn of the conversation.
 func (c Claude) Turn(ctx context.Context, s Spec, emit func(Line)) error {
 	bin := c.Bin
@@ -104,7 +130,7 @@ func (c Claude) Turn(ctx context.Context, s Spec, emit func(Line)) error {
 	}
 	cmd := exec.CommandContext(ctx, bin, c.Args(s)...)
 	cmd.Dir = s.Dir
-	cmd.Stdin = strings.NewReader(s.Message)
+	cmd.Stdin = strings.NewReader(s.Input())
 	env := withoutEnv(os.Environ(), dispatch.EnvToken, dispatch.EnvURL, dispatch.EnvRun, "SHEPHERD_CLIENT")
 	cmd.Env = append(append(env, "SHEPHERD_CLIENT="+store.OriginDesk), s.Env...)
 	inGroup(cmd)
@@ -162,6 +188,11 @@ func Parse(r io.Reader, emit func(Line)) bool {
 				} `json:"delta"`
 			} `json:"event"`
 			Message struct {
+				Usage struct {
+					Input         int `json:"input_tokens"`
+					CacheCreation int `json:"cache_creation_input_tokens"`
+					CacheRead     int `json:"cache_read_input_tokens"`
+				} `json:"usage"`
 				Content []struct {
 					Type  string          `json:"type"`
 					Text  string          `json:"text"`
@@ -179,6 +210,11 @@ func Parse(r io.Reader, emit func(Line)) bool {
 				emit(Line{Kind: KindPartial, Text: m.Event.Delta.Text})
 			}
 		case "assistant":
+			// Each model call reads the whole context: the last call's input is how big
+			// the session has grown.
+			if u := m.Message.Usage; u.Input+u.CacheCreation+u.CacheRead > 0 {
+				emit(Line{Kind: KindUsage, Text: strconv.Itoa(u.Input + u.CacheCreation + u.CacheRead)})
+			}
 			for _, c := range m.Message.Content {
 				switch c.Type {
 				case "text":
@@ -274,4 +310,44 @@ func withoutEnv(env []string, names ...string) []string {
 		}
 	}
 	return out
+}
+
+// Notes asks model, with no tools and no saved session, for the notes paragraph of a
+// summary, and returns it with what the call cost.
+func (c Claude) Notes(ctx context.Context, model, dir, prompt string) (string, float64, error) {
+	bin := c.Bin
+	if bin == "" {
+		var err error
+		if bin, err = exec.LookPath("claude"); err != nil {
+			return "", 0, fmt.Errorf("claude is not on the daemon's PATH")
+		}
+	}
+	cmd := exec.CommandContext(ctx, bin, "-p", "--output-format", "json", "--model", model,
+		"--no-session-persistence", "--tools", "", "--strict-mcp-config", "--mcp-config", `{"mcpServers":{}}`)
+	cmd.Dir = dir
+	cmd.Stdin = strings.NewReader(prompt)
+	cmd.Env = append(withoutEnv(os.Environ(), dispatch.EnvToken, dispatch.EnvURL, dispatch.EnvRun, "SHEPHERD_CLIENT"), "SHEPHERD_CLIENT="+store.OriginDesk)
+	inGroup(cmd)
+	cmd.WaitDelay = 2 * time.Second
+	var errb strings.Builder
+	cmd.Stderr = &errb
+	out, err := cmd.Output()
+	if err != nil {
+		if msg := strings.TrimSpace(errb.String()); msg != "" {
+			return "", 0, fmt.Errorf("%v: %s", err, lastLine(msg))
+		}
+		return "", 0, err
+	}
+	var r struct {
+		IsError bool    `json:"is_error"`
+		Result  string  `json:"result"`
+		Cost    float64 `json:"total_cost_usd"`
+	}
+	if err := json.Unmarshal(out, &r); err != nil {
+		return "", 0, fmt.Errorf("the notes: %v", err)
+	}
+	if r.IsError {
+		return "", r.Cost, fmt.Errorf("the notes: %s", lastLine(r.Result))
+	}
+	return strings.TrimSpace(r.Result), r.Cost, nil
 }

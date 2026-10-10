@@ -26,7 +26,7 @@ import (
 
 // fakeClaude answers as claude -p does, in stream-json. Within each turn it tries to
 // answer decision 1 with the token the daemon gave it and logs the status it got. "please
-// sleep" stalls the turn.
+// sleep" stalls the turn. Its reply read $FAKE_TOKENS tokens of context (5 if unset).
 const fakeClaude = `#!/bin/sh
 msg=$(cat)
 code=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "Authorization: Bearer $SHEPHERD_TOKEN" \
@@ -34,7 +34,7 @@ code=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "Authorization: Bearer 
 echo "ANSWER $code $(printf '%s' "$msg" | head -c 40 | tr '\n' ' ')" >> "$FAKE_LOG"
 echo '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"Hel"}}}'
 case "$msg" in *"please sleep"*) sleep 30 ;; esac
-echo '{"type":"assistant","message":{"content":[{"type":"text","text":"Hello"}]}}'
+echo '{"type":"assistant","message":{"usage":{"input_tokens":'"${FAKE_TOKENS:-5}"'},"content":[{"type":"text","text":"Hello"}]}}'
 echo '{"type":"result","subtype":"success","total_cost_usd":0.02}'
 `
 
@@ -311,5 +311,54 @@ func TestDeskStreamEndsOnClose(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("the stream outlived the daemon")
+	}
+}
+
+// A session past desk.rotate_tokens is rotated between turns: the feed says so once, and
+// the person's stream and history go on as if nothing happened.
+func TestDeskRotationOverHTTP(t *testing.T) {
+	r := newDeskRig(t, config.WakeNever, 0)
+	cfg := r.s.LiveConfig()
+	at := 20000
+	cfg.Desk.RotateTokens = &at
+	r.s.live.Store(&cfg)
+	ch, _ := r.stream(t, api.PathDeskStream+"?after=0", nil)
+	t.Setenv("FAKE_TOKENS", "25000")
+	call(t, r.ts, r.s.Token, "POST", api.PathDeskTurn, api.DeskTurn{Text: "one"}, nil)
+	until(t, ch, store.DeskTurnEnd)
+	var st api.DeskStatus
+	call(t, r.ts, r.s.Token, "GET", api.PathDeskStatus, nil, &st)
+	if st.Session != "" {
+		t.Fatalf("session %q kept past desk.rotate_tokens", st.Session)
+	}
+	var feed api.Feed
+	call(t, r.ts, r.s.Token, "GET", api.PathFeed+"?after=0", nil, &feed)
+	var rotated []string
+	for _, it := range feed.Items {
+		if it.Kind == desk.FeedRotated {
+			rotated = append(rotated, it.Text)
+		}
+	}
+	if len(rotated) != 1 || !strings.Contains(rotated[0], "25000 tokens") {
+		t.Errorf("feed = %+v", feed.Items)
+	}
+	t.Setenv("FAKE_TOKENS", "100")
+	call(t, r.ts, r.s.Token, "POST", api.PathDeskTurn, api.DeskTurn{Text: "two"}, nil)
+	got := until(t, ch, store.DeskTurnEnd)
+	var kinds []string
+	for _, e := range got {
+		kinds = append(kinds, e.kind)
+	}
+	if strings.Join(kinds, ",") != "user,turn_start,partial,assistant,cost,turn_end" || got[0].data.Text != "two" {
+		t.Errorf("stream after the rotation = %v %+v", kinds, got[0])
+	}
+	call(t, r.ts, r.s.Token, "GET", api.PathDeskStatus, nil, &st)
+	if st.Session == "" {
+		t.Error("no session after the rotation")
+	}
+	var hist api.DeskHistory
+	call(t, r.ts, r.s.Token, "GET", api.PathDeskHistory, nil, &hist)
+	if len(hist.Events) != 10 || hist.Events[0].Text != "one" {
+		t.Errorf("history = %+v", hist.Events)
 	}
 }

@@ -18,10 +18,18 @@ import (
 
 // FakeClaude stands in for claude -p: it logs its arguments and the desk's token, and
 // answers in stream-json. A message with "sleep" in it stalls after a partial reply
-// (for interrupts and queueing); "fail" makes the turn fail. Each session's turns cost
-// $0.10, then $0.25, then $0.45 in total, as Claude Code reports a session's total.
+// (for interrupts and queueing), "wait" for a second; "fail" makes the turn fail. Each
+// session's turns cost $0.10, then $0.25, then $0.45 in total, as Claude Code reports a
+// session's total. Each model call reads $FAKE_DIR/tokens tokens of context (1000 if the
+// file is missing). Asked for a summary's notes, it answers with a fixed paragraph.
 const FakeClaude = `#!/bin/sh
 msg=$(cat)
+case "$*" in *--no-session-persistence*)
+  echo "NOTES $*" >> "$FAKE_LOG"
+  echo '{"type":"result","is_error":false,"result":"The person wants the login lane landed today.","total_cost_usd":0.01}'
+  exit 0 ;;
+esac
+tokens=$(cat "$FAKE_DIR/tokens" 2>/dev/null || echo 1000)
 session=""
 prev=""
 for a in "$@"; do
@@ -36,11 +44,11 @@ n=$((n+1))
 echo $n > "$FAKE_DIR/$session.n"
 case $n in 1) c=0.10 ;; 2) c=0.25 ;; *) c=0.45 ;; esac
 echo '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"Hel"}}}'
-case "$msg" in "please sleep"*) sleep 30 ;; esac
+case "$msg" in "please sleep"*) sleep 30 ;; "please wait"*) sleep 1 ;; esac
 case "$msg" in *"please fail"*) echo "the model is gone" >&2; exit 1 ;; esac
 echo '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"lo"}}}'
 echo '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"mcp__shepherd__lane_list","input":{"repo":"app"}}]}}'
-printf '{"type":"assistant","message":{"content":[{"type":"text","text":"reply %s"}]}}\n' "$n"
+printf '{"type":"assistant","message":{"usage":{"input_tokens":3,"cache_read_input_tokens":%s},"content":[{"type":"text","text":"reply %s"}]}}\n' "$((tokens-3))" "$n"
 printf '{"type":"result","subtype":"success","total_cost_usd":%s}\n' "$c"
 `
 
@@ -178,7 +186,7 @@ func TestTurnRoundTrip(t *testing.T) {
 	}
 	log := r.claudeLog(t)
 	if !strings.Contains(log, "--session-id") || !strings.Contains(log, "--append-system-prompt") ||
-		!strings.Contains(log, `["mcp","--scoped"]`) || !strings.Contains(log, "--disallowedTools Edit Write Bash") {
+		!strings.Contains(log, `["mcp","--scoped","--max-output","4000"]`) || !strings.Contains(log, "--disallowedTools Edit Write Bash") {
 		t.Errorf("args:\n%s", log)
 	}
 	if !strings.Contains(log, "TOKEN desk-token-1 URL http://127.0.0.1:9 CLIENT desk") || !strings.Contains(log, "MSG hello there") {

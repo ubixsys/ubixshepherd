@@ -46,9 +46,10 @@ func (s *Server) background() {
 				}
 				return st.AddSpend(ctx, store.Spend{Day: dispatch.Today(), Source: sp.Source, USD: sp.USD})
 			},
-			Model: s.deskModel,
-			Wake:  func() string { return s.LiveConfig().Desk.WakeMode() },
-			Grace: s.DeskGrace,
+			Model:  s.deskModel,
+			Wake:   func() string { return s.LiveConfig().Desk.WakeMode() },
+			Config: s.LiveConfig,
+			Grace:  s.DeskGrace,
 		})
 		s.hub = newFeedHub(s)
 		s.deskStreams, s.feedStreams = newSlots(maxDeskStreams), newSlots(maxFeedStreams)
