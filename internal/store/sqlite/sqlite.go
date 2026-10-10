@@ -223,6 +223,29 @@ var migrations = []string{
 		created      TEXT NOT NULL
 	);
 	CREATE INDEX desk_events_ws ON desk_events (workspace_id, seq);`,
+	// Projects: a brief with an author and an approval, and a request's project and typed
+	// fields. The request columns are nullable, so a row from before reads as empty. Spend
+	// needs no column: a run's repo is its lane's, and a project is its repos.
+	`CREATE TABLE project_briefs (
+		id          INTEGER PRIMARY KEY,
+		project     TEXT NOT NULL,
+		text        TEXT NOT NULL,
+		state       TEXT NOT NULL,
+		drafted_by  TEXT NOT NULL,
+		approved_by TEXT,
+		created     TEXT NOT NULL,
+		approved_at TEXT
+	);
+	CREATE INDEX project_briefs_project ON project_briefs (project, id);
+	CREATE UNIQUE INDEX project_briefs_one_approved ON project_briefs (project) WHERE state = 'approved';
+	CREATE UNIQUE INDEX project_briefs_one_draft ON project_briefs (project) WHERE state = 'draft';
+	ALTER TABLE requests ADD COLUMN project TEXT;
+	ALTER TABLE requests ADD COLUMN from_project TEXT;
+	ALTER TABLE requests ADD COLUMN evidence TEXT;
+	ALTER TABLE requests ADD COLUMN touches TEXT;
+	ALTER TABLE requests ADD COLUMN version TEXT;
+	CREATE INDEX requests_project ON requests (project) WHERE project IS NOT NULL;
+	CREATE INDEX spend_ref ON spend (ref) WHERE ref != 0;`,
 }
 
 // DB is a SQLite-backed store.Store.
@@ -690,23 +713,53 @@ func (s *DB) SetDecisionRun(ctx context.Context, id, runID int64) error {
 	return err
 }
 
-const requestCols = `id, from_run, kind, lane, message, state, agent, target_run, reply, reply_run, depth, note, created, updated`
+const requestCols = `id, from_run, kind, lane, message, state, agent, target_run, reply, reply_run, depth, note, created, updated,
+	COALESCE(project, ''), COALESCE(from_project, ''), COALESCE(evidence, ''), COALESCE(touches, ''), COALESCE(version, '')`
+
+// nullList stores a list as JSON, or NULL when it is empty.
+func nullList(l []string) any {
+	if len(l) == 0 {
+		return nil
+	}
+	b, _ := json.Marshal(l)
+	return string(b)
+}
+
+// nullText stores "" as NULL, so a request not addressed to a project has no project.
+func nullText(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
+}
+
+func listOf(s string) []string {
+	var l []string
+	if s != "" {
+		json.Unmarshal([]byte(s), &l)
+	}
+	return l
+}
 
 func scanRequest(sc interface{ Scan(...any) error }) (store.Request, error) {
 	var q store.Request
-	var created, updated string
+	var created, updated, evidence, touches string
 	err := sc.Scan(&q.ID, &q.FromRun, &q.Kind, &q.Lane, &q.Message, &q.State, &q.Agent, &q.TargetRun,
-		&q.Reply, &q.ReplyRun, &q.Depth, &q.Note, &created, &updated)
+		&q.Reply, &q.ReplyRun, &q.Depth, &q.Note, &created, &updated,
+		&q.Project, &q.FromProject, &evidence, &touches, &q.Version)
 	q.Created, q.Updated = parseTime(created), parseTime(updated)
+	q.Evidence, q.Touches = listOf(evidence), listOf(touches)
 	return q, err
 }
 
 func (s *DB) CreateRequest(ctx context.Context, q store.Request) (store.Request, error) {
 	t := now()
 	res, err := s.db.ExecContext(ctx, `
-		INSERT INTO requests (from_run, kind, lane, message, state, agent, depth, note, created, updated)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		q.FromRun, q.Kind, q.Lane, q.Message, q.State, q.Agent, q.Depth, q.Note, t, t)
+		INSERT INTO requests (from_run, kind, lane, message, state, agent, depth, note, created, updated,
+			project, from_project, evidence, touches, version)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		q.FromRun, q.Kind, q.Lane, q.Message, q.State, q.Agent, q.Depth, q.Note, t, t,
+		nullText(q.Project), nullText(q.FromProject), nullList(q.Evidence), nullList(q.Touches), nullText(q.Version))
 	if err != nil {
 		return q, err
 	}
