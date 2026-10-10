@@ -49,8 +49,13 @@ A config change applies to the next run; no daemon restart is needed.
   `git status`, `git log`, `git show`, `git add`, `git commit`, `ls`, `cat`, `git fetch`,
   `git rebase origin/*`, `git merge-base`, `git rev-parse` and the repo's
   gate. `git push` is denied unless the repo sets `autonomy.push: agent`, and the runner's
-  push block applies as for every agent. Questions, web fetch, web search and access
-  outside the worktree are denied. A chained command such as `ls && touch x` is judged
+  push block applies as for every agent. Questions, web fetch and web search are denied,
+  and so is access outside the worktree: `external_directory` is `deny` except for the
+  lane's own worktree path, which is allowed by exact path (the path as given and its
+  symlink-resolved form). OpenCode 1.18.35 refuses the files of a linked git worktree as
+  external (observed with the worktree as its working directory), so without that allow
+  it refuses even the worktree's own files, and the model falls back to editing the main checkout. The run also gets
+  `--dir <worktree>`, and the process starts there. A chained command such as `ls && touch x` is judged
   per command, so `touch` is refused.
 - **Sessions**: every JSON event carries the session id, which Shepherd records; the next
   run of the lane resumes it with `-s`.

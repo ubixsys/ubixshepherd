@@ -166,6 +166,11 @@ func openCodeArgs(o Opts) []string {
 	if m := openCodeModel(o.Model, s.Endpoint != ""); m != "" {
 		a = append(a, "-m", m)
 	}
+	// The runner also starts the process in the worktree; --dir says it again so the
+	// session's directory never depends on the process's.
+	if o.Worktree != "" {
+		a = append(a, "--dir", o.Worktree)
+	}
 	return a
 }
 
@@ -218,6 +223,31 @@ func (o obj) MarshalJSON() ([]byte, error) {
 	return []byte(b.String()), nil
 }
 
+// openCodeExternal is the external_directory rule: everything outside the project is
+// denied, and the lane's worktree is allowed by exact path. OpenCode 1.18.35 counts a linked
+// git worktree as external even when it is the working directory, so without the allow
+// it refuses even the worktree's own files, and the model then reaches for the main checkout.
+// Rules are last match wins, so the allows follow the deny. Both the path as given and
+// its symlink-resolved form are allowed, since OpenCode compares the path it is handed.
+func openCodeExternal(worktree string) any {
+	if worktree == "" {
+		return "deny"
+	}
+	r := obj{{"*", "deny"}}
+	seen := map[string]bool{}
+	paths := []string{filepath.Clean(worktree)}
+	if real, err := filepath.EvalSymlinks(worktree); err == nil {
+		paths = append(paths, real)
+	}
+	for _, p := range paths {
+		if !seen[p] {
+			seen[p] = true
+			r = append(r, kv{p, "allow"}, kv{filepath.Join(p, "*"), "allow"})
+		}
+	}
+	return r
+}
+
 // openCodeConfig is the run's opencode.json. The permissions are the evaluated set for
 // mechanical edits: files may be edited, shell commands are denied except the repo's
 // build and test tools, reading git state and committing, and everything that reaches
@@ -249,7 +279,7 @@ func openCodeConfig(o Opts, s config.OpenCode) string {
 		{"question", "deny"},
 		{"webfetch", "deny"},
 		{"websearch", "deny"},
-		{"external_directory", "deny"},
+		{"external_directory", openCodeExternal(o.Worktree)},
 		{"doom_loop", "deny"},
 	}
 	cfg := obj{
