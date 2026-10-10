@@ -455,3 +455,43 @@ func TestOpenCodeConfigIsInTheRunsEnvironmentOnly(t *testing.T) {
 		t.Errorf("another agent inherited the config:\n%s", log)
 	}
 }
+
+// OpenCode treats a linked worktree as outside its project, so the worktree's own path is
+// the one external directory the run may use; everything else stays denied, last match wins.
+func TestOpenCodeConfigAllowsOnlyTheWorktree(t *testing.T) {
+	wt := t.TempDir()
+	var cfg struct {
+		Permission map[string]json.RawMessage `json:"permission"`
+	}
+	s := openCodeConfig(Opts{Worktree: wt}, config.OpenCode{})
+	if err := json.Unmarshal([]byte(s), &cfg); err != nil {
+		t.Fatalf("not JSON: %v\n%s", err, s)
+	}
+	ext := string(cfg.Permission["external_directory"])
+	if !strings.HasPrefix(ext, `{"*":"deny",`) {
+		t.Errorf("external_directory must deny by default first: %s", ext)
+	}
+	var rules map[string]string
+	if err := json.Unmarshal([]byte(ext), &rules); err != nil {
+		t.Fatal(err)
+	}
+	for k, v := range rules {
+		if k == "*" {
+			continue
+		}
+		if v != "allow" || !strings.Contains(k, filepath.Base(wt)) {
+			t.Errorf("unexpected external_directory rule %q: %q", k, v)
+		}
+	}
+	if rules[filepath.Join(wt, "*")] != "allow" {
+		t.Errorf("worktree not allowed: %s", ext)
+	}
+	// No worktree known: nothing outside is allowed.
+	if got := string(openCodeConfig(Opts{}, config.OpenCode{})); !strings.Contains(got, `"external_directory":"deny"`) {
+		t.Errorf("no worktree should keep a plain deny: %s", got)
+	}
+	a := strings.Join(openCodeArgs(Opts{Worktree: wt}), " ")
+	if !strings.Contains(a, "--dir "+wt) {
+		t.Errorf("args lack --dir: %s", a)
+	}
+}
