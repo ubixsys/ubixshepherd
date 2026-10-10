@@ -4,7 +4,7 @@
 // `shepherd web` opens). Nothing here ever holds a token. A cookie session's writes carry
 // its CSRF token, read once from /v1/web/session.
 import type {
-  Decision, DecisionView, Feed, LaneView, RequestView, RunEvents, RunLog, RunView, SpendToday, Status,
+  Decision, DecisionView, Feed, LaneRecord, LaneView, RequestView, RunEvents, RunHistory, RunLog, RunView, SpendToday, Status,
 } from './types'
 
 export class ApiError extends Error {
@@ -108,4 +108,16 @@ export const api = {
   feed: (after: number) => get<Feed>(`/v1/feed?${qs({ after })}`),
   /** The person's words, sent only from their own click. */
   answer: (decisionId: number, answer: string) => post<Decision>(`/v1/decisions/${decisionId}/answer`, { answer }),
+}
+
+/** What ran and how it ended, closed lanes included. `since` is an RFC 3339 time. */
+export const history = {
+  /** Closed lanes by default, newest closed first; one lane by id whatever its state. */
+  lanes: (workspaceId: number, since: string, state: 'closed' | 'open' | 'all' = 'closed') =>
+    get<LaneRecord[]>(`/v1/history/lanes?${qs({ workspace_id: workspaceId, state, since })}`),
+  lane: (laneId: number) => get<LaneRecord[]>(`/v1/history/lanes?${qs({ lane_id: laneId })}`),
+  runs: (workspaceId: number, since: string, agent = '', laneId = 0) =>
+    get<RunHistory>(
+      `/v1/history/runs?${qs({ workspace_id: workspaceId, since, ...(agent ? { agent } : {}), ...(laneId ? { lane_id: laneId } : {}) })}`,
+    ),
 }
