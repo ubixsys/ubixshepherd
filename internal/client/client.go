@@ -222,6 +222,27 @@ func (c *Client) RunLog(ctx context.Context, id, offset int64) (api.RunLog, erro
 	return out, c.do(ctx, http.MethodGet, fmt.Sprintf("%s?offset=%d", api.PathRunLog(id), offset), nil, &out)
 }
 
+// LaneConversation reads a lane's conversation: items after the cursor (0 for all), at
+// most limit of them (0 for the daemon's default).
+func (c *Client) LaneConversation(ctx context.Context, laneID int64, after, limit int) (convo.Thread, error) {
+	var out convo.Thread
+	q := fmt.Sprintf("%s?after=%d&limit=%d", api.PathLaneConversation(laneID), after, limit)
+	return out, c.do(ctx, http.MethodGet, q, nil, &out)
+}
+
+// LaneConversationItem reads one item of a lane's conversation with its full text.
+func (c *Client) LaneConversationItem(ctx context.Context, laneID int64, seq int) (convo.Item, error) {
+	var th convo.Thread
+	q := fmt.Sprintf("%s?expand=%d", api.PathLaneConversation(laneID), seq)
+	if err := c.do(ctx, http.MethodGet, q, nil, &th); err != nil {
+		return convo.Item{}, err
+	}
+	if len(th.Items) == 0 {
+		return convo.Item{}, fmt.Errorf("item %d is not in lane %d's conversation", seq, laneID)
+	}
+	return th.Items[0], nil
+}
+
 func (c *Client) AddEvent(ctx context.Context, runID int64, e store.Event) (store.Event, error) {
 	var out store.Event
 	return out, c.do(ctx, http.MethodPost, api.PathRunEvents(runID), e, &out)

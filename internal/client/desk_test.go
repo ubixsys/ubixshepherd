@@ -204,3 +204,25 @@ func TestFollowTakesASilentStreamForDead(t *testing.T) {
 		t.Errorf("silent stream was not reopened: %d opens", opens)
 	}
 }
+
+func TestLaneConversationCalls(t *testing.T) {
+	var got []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = append(got, r.Method+" "+r.URL.RequestURI())
+		w.Write([]byte(`{"items":[{"seq":3,"kind":"tool","run":1,"tool":"Bash","output":"all of it"}],"cursor":3,"more":false,"running":true}`))
+	}))
+	defer srv.Close()
+	c := New(srv.URL, "tok")
+	th, err := c.LaneConversation(context.Background(), 4, 2, 50)
+	if err != nil || th.Cursor != 3 || !th.Running || th.Items[0].Tool != "Bash" {
+		t.Fatalf("thread = %+v, %v", th, err)
+	}
+	it, err := c.LaneConversationItem(context.Background(), 4, 3)
+	if err != nil || it.Output != "all of it" {
+		t.Fatalf("item = %+v, %v", it, err)
+	}
+	want := []string{"GET /v1/lanes/4/conversation?after=2&limit=50", "GET /v1/lanes/4/conversation?expand=3"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Errorf("calls = %v", got)
+	}
+}
