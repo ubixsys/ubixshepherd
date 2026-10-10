@@ -1,7 +1,9 @@
 package api
 
 import (
+	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/ubixsys/ubixshepherd/internal/store"
 )
@@ -63,5 +65,29 @@ func TestFeedEventFallback(t *testing.T) {
 	f := Feed{Items: []store.FeedItem{{Kind: store.FeedMR}}}
 	if f.Event(0) != EventMR {
 		t.Errorf("Event(0) = %q", f.Event(0))
+	}
+}
+
+func TestBriefViewRoundTrip(t *testing.T) {
+	at := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	in := BriefView{
+		Project: "shop", Approved: &store.ProjectBrief{ID: 3, Project: "shop", Text: "focus", State: store.BriefApproved, Approved: &at},
+		Age: 41 * 24 * time.Hour, AgeText: "approved 41 days ago", Stale: true, MaxAge: 30 * 24 * time.Hour,
+		Pending: &store.ProjectBrief{ID: 4, Project: "shop", Text: "next", State: store.BriefDraft},
+		Caches:  []BriefCache{{Path: "/b", Repo: "r", Recipe: "x.sh"}},
+	}
+	b, err := json.Marshal(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out BriefView
+	if err := json.Unmarshal(b, &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.Age != in.Age || !out.Stale || out.Approved.ID != 3 || out.Pending.State != store.BriefDraft || out.Caches[0].Recipe != "x.sh" || !out.Approved.Approved.Equal(at) {
+		t.Errorf("round trip = %+v", out)
+	}
+	if got := PathProjectBriefApprove("a b"); got != "/v1/projects/a%20b/brief/approve" {
+		t.Errorf("path = %q", got)
 	}
 }

@@ -563,3 +563,24 @@ func (e *refused) Error() string {
 	return where + " refused the access token (it probably restarted; a redial reads the new one)"
 }
 func (e *refused) Is(target error) bool { return target == ErrNoDaemon }
+
+// ProjectBrief reads a project's approved brief with its age and stale flag, and its
+// open draft.
+func (c *Client) ProjectBrief(ctx context.Context, project string) (api.BriefView, error) {
+	var out api.BriefView
+	return out, c.do(ctx, http.MethodGet, api.PathProjectBrief(project), nil, &out)
+}
+
+// DraftBrief records a draft brief for a project. Only the person's own token or the
+// front desk may; a draft is never given to an agent until the person approves it.
+func (c *Client) DraftBrief(ctx context.Context, project, text string) (store.ProjectBrief, error) {
+	var out store.ProjectBrief
+	return out, c.do(ctx, http.MethodPost, api.PathProjectBriefDraft(project), api.DraftBrief{Text: text}, &out)
+}
+
+// ApproveBrief approves a project's open draft with the person's words. The daemon
+// refuses it from an agent's token.
+func (c *Client) ApproveBrief(ctx context.Context, project string, id int64, words string) (store.ProjectBrief, error) {
+	var out store.ProjectBrief
+	return out, c.do(ctx, http.MethodPost, api.PathProjectBriefApprove(project), api.ApproveBrief{ID: id, Words: words}, &out)
+}

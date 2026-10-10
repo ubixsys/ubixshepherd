@@ -513,6 +513,21 @@ type ProjectBrief struct {
 	Approved   *time.Time `json:"approved,omitempty"`
 }
 
+// Age is the wall-clock time since the brief was approved; zero for a brief that is not
+// approved.
+func (b ProjectBrief) Age(now time.Time) time.Duration {
+	if b.Approved == nil || now.Before(*b.Approved) {
+		return 0
+	}
+	return now.Sub(*b.Approved)
+}
+
+// Stale reports whether an approved brief is older than max. A brief exactly max old is
+// not stale yet; a draft or a zero max is never stale.
+func (b ProjectBrief) Stale(now time.Time, max time.Duration) bool {
+	return b.Approved != nil && max > 0 && b.Age(now) > max
+}
+
 // RepoSpend is what the runs in one repo cost over a range of days.
 type RepoSpend struct {
 	RepoID  int64   `json:"repo_id"`

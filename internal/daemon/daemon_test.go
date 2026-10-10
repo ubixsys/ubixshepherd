@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -582,5 +583,91 @@ func TestHistoryRoutes(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusForbidden {
 		t.Errorf("worker token: %d, want 403", resp.StatusCode)
+	}
+}
+
+func TestProjectBriefDraftApproveRead(t *testing.T) {
+	s, ts := newServer(t)
+	cfg := config.Default()
+	cfg.Repos = map[string]config.Profile{"app": {}}
+	cfg.Projects = map[string]config.Project{"shop": {
+		Repos: []string{"app"}, BriefMaxAge: "1ns",
+		Caches: []config.Cache{{Path: "/build/objs", MadeBy: "app:tools/objs.sh", Note: "rebuild"}},
+	}}
+	s.applyConfig(cfg)
+	path := api.PathProjectBrief("shop")
+
+	if code := call(t, ts, s.Token, "GET", api.PathProjectBrief("nope"), nil, nil); code != http.StatusNotFound {
+		t.Errorf("unknown project: %d", code)
+	}
+	var v api.BriefView
+	if code := call(t, ts, s.Token, "GET", path, nil, &v); code != http.StatusOK || v.Approved != nil || v.Pending != nil || len(v.Caches) != 1 || v.Caches[0].Recipe != "tools/objs.sh" || v.Caches[0].Repo != "app" {
+		t.Fatalf("empty brief: %d %+v", code, v)
+	}
+
+	var d store.ProjectBrief
+	if code := call(t, ts, s.Token, "POST", api.PathProjectBriefDraft("shop"), api.DraftBrief{Text: "Ship checkout. glpat-AbCdEfGhIjKlMnOpQrStUv"}, &d); code != http.StatusOK || d.State != store.BriefDraft || strings.Contains(d.Text, "glpat-") {
+		t.Fatalf("draft: %d %+v", code, d)
+	}
+	if code := call(t, ts, s.Token, "POST", api.PathProjectBriefDraft("shop"), api.DraftBrief{Text: "  "}, nil); code != http.StatusBadRequest {
+		t.Errorf("empty draft: %d", code)
+	}
+	call(t, ts, s.Token, "GET", path, nil, &v)
+	if v.Approved != nil || v.Pending == nil || v.Pending.ID != d.ID {
+		t.Errorf("a draft is not approved: %+v", v)
+	}
+
+	// An agent's token cannot read, draft or approve; the desk cannot approve outside a
+	// turn the person started.
+	run, _, _, _ := twoRuns(t, s)
+	worker, _ := s.MintWorker(run.ID)
+	for _, c := range []struct{ method, path string }{
+		{"GET", path}, {"POST", api.PathProjectBriefDraft("shop")}, {"POST", api.PathProjectBriefApprove("shop")},
+	} {
+		if code := call(t, ts, worker, c.method, c.path, api.ApproveBrief{ID: d.ID, Words: "yes"}, nil); code != http.StatusForbidden {
+			t.Errorf("worker %s %s: %d", c.method, c.path, code)
+		}
+	}
+	system, _ := s.MintDesk(false, "")
+	approve := api.ApproveBrief{ID: d.ID, Words: "Yes, that is the focus."}
+	if code := call(t, ts, system, "POST", api.PathProjectBriefApprove("shop"), approve, nil); code != http.StatusForbidden {
+		t.Errorf("desk outside a human turn approved: %d", code)
+	}
+	if code := call(t, ts, s.Token, "POST", api.PathProjectBriefApprove("shop"), api.ApproveBrief{ID: d.ID}, nil); code != http.StatusBadRequest {
+		t.Errorf("approval without words: %d", code)
+	}
+	v = api.BriefView{}
+	call(t, ts, s.Token, "GET", path, nil, &v)
+	if v.Approved != nil {
+		t.Fatal("brief approved without the person's words")
+	}
+
+	human, _ := s.MintDesk(true, "")
+	var b store.ProjectBrief
+	if code := call(t, ts, human, "POST", api.PathProjectBriefApprove("shop"), approve, &b); code != http.StatusOK || b.State != store.BriefApproved || b.ApprovedBy != "person" || b.DraftedBy != "operator" {
+		t.Fatalf("approve: %d %+v", code, b)
+	}
+	if code := call(t, ts, s.Token, "POST", api.PathProjectBriefApprove("shop"), approve, nil); code != http.StatusConflict {
+		t.Errorf("approving twice: %d", code)
+	}
+	v = api.BriefView{}
+	call(t, ts, s.Token, "GET", path, nil, &v)
+	if v.Approved == nil || v.Approved.ID != d.ID || v.Pending != nil || !strings.HasPrefix(v.AgeText, "approved ") || !v.Stale || v.MaxAge != 1 {
+		t.Errorf("read after approval: %+v", v)
+	}
+
+	// The desk drafts as itself, and a draft it wrote is refused its own approval at the
+	// store even if a route were to let it through.
+	dd := store.ProjectBrief{}
+	deskTok, _ := s.MintDesk(false, "")
+	if code := call(t, ts, deskTok, "POST", api.PathProjectBriefDraft("shop"), api.DraftBrief{Text: "Refresh."}, &dd); code != http.StatusOK || dd.DraftedBy != "desk" {
+		t.Errorf("desk draft: %d %+v", code, dd)
+	}
+	if _, err := s.Store.ApproveBrief(context.Background(), dd.ID, "desk"); !errors.Is(err, store.ErrSelfApproval) {
+		t.Errorf("desk approving its own draft: %v", err)
+	}
+	var other store.ProjectBrief
+	if code := call(t, ts, s.Token, "POST", api.PathProjectBriefApprove("other"), api.ApproveBrief{ID: dd.ID, Words: "ok"}, &other); code != http.StatusNotFound {
+		t.Errorf("approve under an unknown project: %d", code)
 	}
 }

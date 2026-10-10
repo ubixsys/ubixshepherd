@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -89,5 +90,46 @@ func TestHistoryQueries(t *testing.T) {
 	}
 	if got[1] != "/v1/history/runs?agent=claude&lane_id=4&since=2026-10-10T06%3A00%3A00Z&workspace_id=3" {
 		t.Errorf("runs query = %s", got[1])
+	}
+}
+
+func TestBriefCallsMatchTheRoutes(t *testing.T) {
+	type seen struct{ method, path, body string }
+	var got []seen
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		got = append(got, seen{r.Method, r.URL.Path, string(b)})
+		switch r.Method {
+		case http.MethodGet:
+			w.Write([]byte(`{"project":"a b","age_text":"approved today","stale":true,"max_age":1}`))
+		default:
+			w.Write([]byte(`{"id":7,"project":"a b","state":"draft"}`))
+		}
+	}))
+	defer srv.Close()
+	c := &Client{base: srv.URL, http: srv.Client()}
+	ctx := context.Background()
+	v, err := c.ProjectBrief(ctx, "a b")
+	if err != nil || !v.Stale || v.AgeText != "approved today" {
+		t.Fatalf("view = %+v, %v", v, err)
+	}
+	if d, err := c.DraftBrief(ctx, "a b", "focus"); err != nil || d.ID != 7 {
+		t.Fatalf("draft = %+v, %v", d, err)
+	}
+	if _, err := c.ApproveBrief(ctx, "a b", 7, "yes"); err != nil {
+		t.Fatal(err)
+	}
+	want := []seen{
+		{"GET", "/v1/projects/a b/brief", ""},
+		{"POST", "/v1/projects/a b/brief/draft", `{"text":"focus"}`},
+		{"POST", "/v1/projects/a b/brief/approve", `{"id":7,"words":"yes"}`},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("calls = %+v", got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("call %d = %+v, want %+v", i, got[i], want[i])
+		}
 	}
 }

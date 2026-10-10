@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ubixsys/ubixshepherd/internal/store"
 )
@@ -308,4 +309,34 @@ func fixture(t *testing.T, db *DB, name string) (store.Workspace, store.Repo, st
 		t.Fatal(err)
 	}
 	return ws, repo, run
+}
+
+func TestBriefAgeAndStaleBoundary(t *testing.T) {
+	ctx := context.Background()
+	db, _ := open(t)
+	d, err := db.SaveBriefDraft(ctx, "p", "focus", "desk")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Age(time.Now()) != 0 || d.Stale(time.Now().Add(1000*time.Hour), time.Hour) {
+		t.Error("a draft has an age or is stale")
+	}
+	b, err := db.ApproveBrief(ctx, d.ID, "person")
+	if err != nil {
+		t.Fatal(err)
+	}
+	max := 30 * 24 * time.Hour
+	at := *b.Approved
+	if got := b.Age(at.Add(41 * 24 * time.Hour)); got != 41*24*time.Hour {
+		t.Errorf("age = %v", got)
+	}
+	if b.Stale(at.Add(max), max) {
+		t.Error("stale exactly at the limit")
+	}
+	if !b.Stale(at.Add(max+time.Second), max) {
+		t.Error("not stale past the limit")
+	}
+	if b.Age(at.Add(-time.Hour)) != 0 {
+		t.Error("a clock behind approval gives a negative age")
+	}
 }

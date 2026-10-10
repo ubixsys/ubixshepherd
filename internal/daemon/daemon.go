@@ -173,6 +173,11 @@ func (s *Server) Handler() http.Handler {
 	handle("POST "+api.PathSpend, operatorOnly, s.withRunner(s.addSpend))
 	handle("GET "+api.PathSettings+"/{key}", operatorOnly, s.getSetting)
 	handle("PUT "+api.PathSettings+"/{key}", operatorOnly, s.putSetting)
+	// A project's brief is the person's: the desk drafts and reads it, and only the person
+	// approves. No worker route: an agent suggests a change through ask_shepherd.
+	handle("GET "+api.PathProjects+"/{name}/brief", desk, s.getBrief)
+	handle("POST "+api.PathProjects+"/{name}/brief/draft", desk, s.draftBrief)
+	handle("POST "+api.PathProjects+"/{name}/brief/approve", desk, s.personsApproval(s.approveBrief))
 	handle("GET "+api.PathRequests, desk, s.listRequests)
 	handle("POST "+api.PathRequests+"/{id}/route", desk, s.withRunner(s.routeRequest))
 	handle("POST "+api.PathRequests+"/{id}/close", desk, s.withRunner(s.closeRequest))
@@ -1359,6 +1364,146 @@ func (s *Server) answerDecision(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, d)
+}
+
+// personsApproval guards approving a project's brief. Like an answer it is the person's:
+// an agent's token never reaches it (the route is not for workers), and the front desk
+// records one only in a turn the person started.
+func (s *Server) personsApproval(h http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if p := principalOf(r.Context()); p.Role == RoleDesk && !p.Human {
+			writeError(w, http.StatusForbidden, errors.New("the front desk may approve a brief only in a turn the person started; bring the draft to them"))
+			return
+		}
+		h(w, r)
+	}
+}
+
+// maxBrief is the longest project brief the daemon takes: a few lines to a page.
+const maxBrief = 16 << 10
+
+// pathProject is the configured project the path names, or a 404.
+func (s *Server) pathProject(w http.ResponseWriter, r *http.Request) (string, config.Project, bool) {
+	name := r.PathValue("name")
+	cfg := s.LiveConfig()
+	if _, ok := cfg.Projects[name]; !ok {
+		writeError(w, http.StatusNotFound, fmt.Errorf("no project %q in the configuration", name))
+		return "", config.Project{}, false
+	}
+	return name, cfg.Project(name), true
+}
+
+// briefError answers a store refusal of a brief with 409 and a missing one with 404.
+func (s *Server) briefError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, store.ErrConflict):
+		writeError(w, http.StatusConflict, err)
+	case errors.Is(err, store.ErrNotFound):
+		writeError(w, http.StatusNotFound, err)
+	default:
+		s.fail(w, err)
+	}
+}
+
+// getBrief reads a project's approved brief with its age, whether it is stale, the
+// open draft and the declared caches.
+func (s *Server) getBrief(w http.ResponseWriter, r *http.Request) {
+	name, p, ok := s.pathProject(w, r)
+	if !ok {
+		return
+	}
+	ctx := r.Context()
+	view := api.BriefView{Project: name, MaxAge: p.MaxAge()}
+	b, err := s.Store.ApprovedBrief(ctx, name)
+	switch {
+	case err == nil:
+		now := time.Now().UTC()
+		view.Approved, view.Age = &b, b.Age(now)
+		view.AgeText, view.Stale = "approved "+dispatch.AgeText(view.Age), b.Stale(now, view.MaxAge)
+	case !errors.Is(err, store.ErrNotFound):
+		s.fail(w, err)
+		return
+	}
+	d, err := s.Store.PendingBrief(ctx, name)
+	switch {
+	case err == nil:
+		view.Pending = &d
+	case !errors.Is(err, store.ErrNotFound):
+		s.fail(w, err)
+		return
+	}
+	for _, c := range p.Caches {
+		repo, recipe, _ := c.Recipe()
+		view.Caches = append(view.Caches, api.BriefCache{Path: c.Path, Repo: repo, Recipe: recipe, Note: c.Note})
+	}
+	writeJSON(w, http.StatusOK, view)
+}
+
+// draftBrief records a draft, redacted like other agent text. It is never given to an
+// agent until the person approves it.
+func (s *Server) draftBrief(w http.ResponseWriter, r *http.Request) {
+	name, _, ok := s.pathProject(w, r)
+	if !ok {
+		return
+	}
+	var req api.DraftBrief
+	if !decode(w, r, &req) {
+		return
+	}
+	text := strings.TrimSpace(redact.String(req.Text))
+	switch {
+	case text == "":
+		writeError(w, http.StatusBadRequest, errors.New("a brief needs text"))
+		return
+	case len(text) > maxBrief:
+		writeError(w, http.StatusBadRequest, fmt.Errorf("a brief is a few lines to a page; this is %d bytes, the limit is %d", len(text), maxBrief))
+		return
+	}
+	// The desk is not the person: a draft it wrote is theirs to approve. What the person
+	// types themselves is recorded as the operator's, so they can approve it.
+	by := "operator"
+	if principalOf(r.Context()).Role == RoleDesk {
+		by = "desk"
+	}
+	b, err := s.Store.SaveBriefDraft(r.Context(), name, text, by)
+	if err != nil {
+		s.briefError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, b)
+}
+
+// approveBrief approves the project's open draft with the person's words.
+func (s *Server) approveBrief(w http.ResponseWriter, r *http.Request) {
+	name, _, ok := s.pathProject(w, r)
+	if !ok {
+		return
+	}
+	var req api.ApproveBrief
+	if !decode(w, r, &req) {
+		return
+	}
+	if strings.TrimSpace(req.Words) == "" {
+		writeError(w, http.StatusBadRequest, errors.New("an approval is the person's own words"))
+		return
+	}
+	ctx := r.Context()
+	d, err := s.Store.ProjectBrief(ctx, req.ID)
+	if err != nil {
+		s.briefError(w, err)
+		return
+	}
+	if d.Project != name {
+		writeError(w, http.StatusConflict, fmt.Errorf("brief %d is for project %q, not %q", d.ID, d.Project, name))
+		return
+	}
+	b, err := s.Store.ApproveBrief(ctx, req.ID, "person")
+	if err != nil {
+		s.briefError(w, err)
+		return
+	}
+	s.Log.Info("project brief approved", "project", name, "brief", b.ID, "drafted_by", b.DraftedBy, "words", redact.String(req.Words))
+	writeJSON(w, http.StatusOK, b)
 }
 
 func (s *Server) pathRun(w http.ResponseWriter, r *http.Request) (store.Run, bool) {
