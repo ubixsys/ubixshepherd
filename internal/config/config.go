@@ -125,9 +125,9 @@ const (
 	// MinSummaryChars and MinToolOutputChars keep a cap from leaving nothing useful.
 	MinSummaryChars    = 1000
 	MinToolOutputChars = 500
-	// MinRotateTokens keeps a session from rotating on every turn: the brief and the
-	// tools alone are some thousands of tokens.
-	MinRotateTokens = 20000
+	// MinRotateTokens keeps a session from rotating on every turn: Claude Code's own
+	// prompt, the brief and the tools come to over 20000 tokens before anything is said.
+	MinRotateTokens = 50000
 	MaxSummaryTurns = 50
 )
 

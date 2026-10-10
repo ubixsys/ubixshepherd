@@ -228,7 +228,7 @@ func TestDeskRotation(t *testing.T) {
 		t.Errorf("set = %+v", d)
 	}
 	for in, want := range map[string]string{
-		"rotate_tokens: 500":     "desk.rotate_tokens: 500; at least 20000",
+		"rotate_tokens: 500":     "desk.rotate_tokens: 500; at least 50000",
 		"rotate_tokens: -1":      "desk.rotate_tokens",
 		"rotate_cost: 0":         "desk.rotate_cost",
 		"rotate_cost: -3":        "desk.rotate_cost",

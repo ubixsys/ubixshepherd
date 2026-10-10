@@ -598,7 +598,10 @@ func (d *Desk) seed(ctx context.Context, turn int64) (string, error) {
 		return "", err
 	}
 	c := in.cfg.Desk
-	return in.render(c.SummaryCap(), d.notes(ctx, c.SummaryModel, in)), nil
+	notes := d.notes(ctx, c.SummaryModel, in)
+	out := in.render(c.SummaryCap(), notes)
+	d.m.o.Log.Info("desk: seeded a new session with a summary", "workspace", d.ws.Name, "chars", len(out), "notes", notes != "")
+	return out, nil
 }
 
 // notes asks desk.summary_model for a paragraph on the conversation's open threads, from

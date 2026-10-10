@@ -319,11 +319,11 @@ func TestDeskStreamEndsOnClose(t *testing.T) {
 func TestDeskRotationOverHTTP(t *testing.T) {
 	r := newDeskRig(t, config.WakeNever, 0)
 	cfg := r.s.LiveConfig()
-	at := 20000
+	at := 50000
 	cfg.Desk.RotateTokens = &at
 	r.s.live.Store(&cfg)
 	ch, _ := r.stream(t, api.PathDeskStream+"?after=0", nil)
-	t.Setenv("FAKE_TOKENS", "25000")
+	t.Setenv("FAKE_TOKENS", "60000")
 	call(t, r.ts, r.s.Token, "POST", api.PathDeskTurn, api.DeskTurn{Text: "one"}, nil)
 	until(t, ch, store.DeskTurnEnd)
 	var st api.DeskStatus
@@ -339,7 +339,7 @@ func TestDeskRotationOverHTTP(t *testing.T) {
 			rotated = append(rotated, it.Text)
 		}
 	}
-	if len(rotated) != 1 || !strings.Contains(rotated[0], "25000 tokens") {
+	if len(rotated) != 1 || !strings.Contains(rotated[0], "60000 tokens") {
 		t.Errorf("feed = %+v", feed.Items)
 	}
 	t.Setenv("FAKE_TOKENS", "100")
