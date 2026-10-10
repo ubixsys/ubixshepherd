@@ -61,6 +61,8 @@ func commands() []command {
 	return []command{
 		{"chat", "The one conversation: talk to Shepherd's front desk, with the swarm's events in the thread",
 			"shepherd chat [--model M]", runChat},
+		{"web", "Sign a browser in to the web UI the daemon serves (a one-time link)",
+			"shepherd web [--print] [--sign-out-all]", runWeb},
 		{"daemon", "Run or manage the daemon (start, stop, restart, status, install, uninstall)",
 			"shepherd daemon [run | start | stop | restart | status | install | uninstall]", runDaemon},
 		{"init", "Register a workspace and choose which of its repos Shepherd manages",

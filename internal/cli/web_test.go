@@ -91,3 +91,35 @@ func TestWebSignOutAll(t *testing.T) {
 		t.Errorf("extra argument: %v", err)
 	}
 }
+
+// The command is registered: `shepherd web` runs it through Run, with its flags and its
+// usage line.
+func TestWebCommandRegistered(t *testing.T) {
+	h := newHarness(t, "", false)
+	defer func(f func(string) error) { openBrowser = f }(openBrowser)
+	var opened []string
+	openBrowser = func(u string) error { opened = append(opened, u); return nil }
+
+	if code := h.run("web", "--print"); code != 0 {
+		t.Fatalf("web --print: exit %d: %s", code, h.err.String())
+	}
+	u := strings.TrimSpace(h.out.String())
+	if !strings.Contains(u, api.PathWebSignin+"?code=") || len(opened) != 0 {
+		t.Fatalf("printed %q, opened %q", u, opened)
+	}
+	if resp := openLink(t, u); resp.StatusCode != http.StatusSeeOther {
+		t.Errorf("printed link: %d", resp.StatusCode)
+	}
+	if code := h.run("web"); code != 0 || len(opened) != 1 {
+		t.Errorf("web: exit %d, opened %q: %s", code, opened, h.err.String())
+	}
+	if code := h.run("web", "--sign-out-all"); code != 0 || strings.TrimSpace(h.out.String()) != "ended 1 browser session" {
+		t.Errorf("web --sign-out-all: exit %d: %q", code, h.out.String())
+	}
+	if code := h.run("web", "extra"); code != 2 || !strings.Contains(h.err.String(), "shepherd web [--print] [--sign-out-all]") {
+		t.Errorf("web extra: exit %d: %s", code, h.err.String())
+	}
+	if code := h.run("help"); code != 0 || !strings.Contains(h.out.String(), "web") {
+		t.Errorf("help does not list web: %s", h.out.String())
+	}
+}
