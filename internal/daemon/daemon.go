@@ -69,6 +69,8 @@ type Server struct {
 	// tokens are the scoped tokens minted since start; addr is where the API listens.
 	tokens tokens
 	addr   atomic.Pointer[string]
+	// web holds browser sign-in codes and sessions (web.go).
+	web webAuth
 }
 
 // NewServer returns a Server with a fresh random token.
@@ -115,13 +117,14 @@ func NewLogger() *slog.Logger {
 	return newLogger(os.Stderr, LogLevel(""))
 }
 
-// Handler is the API, behind token authentication. Each route says which scoped roles
-// may call it (see auth.go); the operator token may call every one.
+// Handler is the API, behind token or browser-session authentication, and the web UI.
+// Each route says which scoped roles may call it (see auth.go); the operator token may
+// call every one. Every request must name a loopback host (web.go).
 func (s *Server) Handler() http.Handler {
 	s.background()
 	mux := http.NewServeMux()
 	handle := func(pattern string, a access, h http.HandlerFunc) { mux.HandleFunc(pattern, guard(a, h)) }
-	const desk, worker, own = forDesk, forWorker, ownRun
+	const desk, worker, own, web = forDesk, forWorker, ownRun, forWeb
 	handle("GET "+api.PathStatus, desk|worker, s.status)
 	handle("GET "+api.PathWorkspaces, desk, s.listWorkspaces)
 	handle("POST "+api.PathWorkspaces, operatorOnly, s.saveWorkspace)
@@ -167,14 +170,21 @@ func (s *Server) Handler() http.Handler {
 	handle("GET "+api.PathRequests, desk, s.listRequests)
 	handle("POST "+api.PathRequests+"/{id}/route", desk, s.withRunner(s.routeRequest))
 	handle("POST "+api.PathRequests+"/{id}/close", desk, s.withRunner(s.closeRequest))
-	// The daemon's front desk: the person's alone (api/desk.go).
-	handle("POST "+api.PathDeskTurn, operatorOnly, s.deskTurn)
-	handle("GET "+api.PathDeskStream, operatorOnly, s.deskStream)
-	handle("GET "+api.PathDeskHistory, operatorOnly, s.deskHistory)
-	handle("GET "+api.PathDeskStatus, operatorOnly, s.deskStatus)
-	handle("POST "+api.PathDeskInterrupt, operatorOnly, s.deskInterrupt)
-	handle("POST "+api.PathDeskNew, operatorOnly, s.deskNew)
-	return s.logRequests(s.auth(mux))
+	// The daemon's front desk: the person's alone, in the terminal or a browser
+	// (api/desk.go).
+	handle("POST "+api.PathDeskTurn, web, s.deskTurn)
+	handle("GET "+api.PathDeskStream, web, s.deskStream)
+	handle("GET "+api.PathDeskHistory, web, s.deskHistory)
+	handle("GET "+api.PathDeskStatus, web, s.deskStatus)
+	handle("POST "+api.PathDeskInterrupt, web, s.deskInterrupt)
+	handle("POST "+api.PathDeskNew, web, s.deskNew)
+	// Browser sign-in and sessions (api/web.go, web.go). The link's exchange, a GET with
+	// no token, is browserGate's.
+	handle("POST "+api.PathWebSignin, operatorOnly, s.webSignin)
+	handle("GET "+api.PathWebSession, web, s.webSessionInfo)
+	handle("POST "+api.PathWebSignout, web, s.webSignout)
+	handle("DELETE "+api.PathWebSessions, operatorOnly, s.webEndAll)
+	return s.logRequests(s.browserGate(s.auth(mux)))
 }
 
 // withRunner refuses a request that needs agents when this server has no Runner (a
