@@ -5,9 +5,9 @@ describe('Legend', () => {
   it('renders one dd per event', () => {
     render(<Legend />)
     
-    // There should be 22 events
+    // There should be 23 events
     const dds = screen.getAllByRole('definition')
-    expect(dds).toHaveLength(22)
+    expect(dds).toHaveLength(23)
   })
   
   it('says what each glyph means in its own words', () => {

@@ -19,7 +19,7 @@ import "github.com/ubixsys/ubixshepherd/internal/store"
 //	pipeline           the forge's pipeline only: pass, fail or hand-back (old rows that
 //	                   described the gate stay pipeline)
 //	report, decision_asked, decision_answered, request, request_attention,
-//	mr, budget, tag, release, config
+//	mr, budget, tag, release, config, desk_rotated
 //	info               anything else, and any kind a newer daemon adds
 const (
 	EventLaneOpened       = "lane_opened"
@@ -43,7 +43,8 @@ const (
 	EventTag              = "tag"
 	EventRelease          = "release"
 	EventConfig           = "config"
-	EventInfo             = "info" // anything else, such as a session note
+	EventDeskRotated      = "desk_rotated" // the front desk started a new session, seeded with a summary
+	EventInfo             = "info"         // anything else, such as a session note
 )
 
 // eventKinds is the one place a store feed kind becomes an event.
@@ -71,7 +72,8 @@ var eventKinds = map[string]string{
 	store.FeedBudget:         EventBudget,
 	store.FeedTag:            EventTag,
 	store.FeedRelease:        EventRelease,
-	"config":                 EventConfig, // the daemon's own kind (daemon.FeedConfig)
+	"config":                 EventConfig,      // the daemon's own kind (daemon.FeedConfig)
+	"desk_rotated":           EventDeskRotated, // the daemon desk's own kind (desk.FeedRotated)
 }
 
 // EventKind maps a store feed kind to its event; any kind not listed is EventInfo.

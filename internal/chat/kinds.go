@@ -11,4 +11,5 @@ const (
 	kindRunQuota       = "run_quota"       // the agent is out of quota and held
 	kindCommit         = "commit"          // a run ended having made commits
 	kindGate           = "gate"            // Shepherd's own check before a push
+	kindDeskRotated    = "desk_rotated"    // the front desk's session was rotated
 )
