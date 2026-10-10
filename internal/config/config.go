@@ -97,6 +97,78 @@ type Desk struct {
 	// (a run ended, a decision, a request needing routing): one of WakeModes; ""
 	// is WakeAttached.
 	Wake string `yaml:"wake" json:"wake,omitempty"`
+	// RotateTokens rotates the daemon's desk session once a turn's context (its input
+	// and cache tokens) passes it; nil is DefaultRotateTokens, 0 never rotates on size.
+	RotateTokens *int `yaml:"rotate_tokens,omitempty" json:"rotate_tokens,omitempty"`
+	// RotateCost rotates it once the session's total cost passes this many dollars;
+	// nil never rotates on cost.
+	RotateCost *float64 `yaml:"rotate_cost,omitempty" json:"rotate_cost,omitempty"`
+	// SummaryModel writes a short notes paragraph into the summary a new session is
+	// seeded with; "" leaves it out.
+	SummaryModel string `yaml:"summary_model,omitempty" json:"summary_model,omitempty"`
+	// SummaryChars caps the summary; 0 is DefaultSummaryChars.
+	SummaryChars int `yaml:"summary_chars,omitempty" json:"summary_chars,omitempty"`
+	// SummaryTurns is how many of the thread's last turns the summary quotes; nil is
+	// DefaultSummaryTurns.
+	SummaryTurns *int `yaml:"summary_turns,omitempty" json:"summary_turns,omitempty"`
+	// ToolOutputChars caps what each operator tool returns to the daemon's desk; 0 is
+	// DefaultToolOutputChars.
+	ToolOutputChars int `yaml:"tool_output_chars,omitempty" json:"tool_output_chars,omitempty"`
+}
+
+// The desk's defaults and bounds.
+const (
+	DefaultRotateTokens    = 150000
+	DefaultSummaryChars    = 6000
+	DefaultSummaryTurns    = 6
+	DefaultToolOutputChars = 4000
+	// MinSummaryChars and MinToolOutputChars keep a cap from leaving nothing useful.
+	MinSummaryChars    = 1000
+	MinToolOutputChars = 500
+	// MinRotateTokens keeps a session from rotating on every turn: Claude Code's own
+	// prompt, the brief and the tools come to over 20000 tokens before anything is said.
+	MinRotateTokens = 50000
+	MaxSummaryTurns = 50
+)
+
+// RotateAt is desk.rotate_tokens with its default filled in; 0 is off.
+func (d Desk) RotateAt() int {
+	if d.RotateTokens == nil {
+		return DefaultRotateTokens
+	}
+	return *d.RotateTokens
+}
+
+// RotateUSD is desk.rotate_cost; 0 is off.
+func (d Desk) RotateUSD() float64 {
+	if d.RotateCost == nil {
+		return 0
+	}
+	return *d.RotateCost
+}
+
+// SummaryCap is desk.summary_chars with its default filled in.
+func (d Desk) SummaryCap() int {
+	if d.SummaryChars == 0 {
+		return DefaultSummaryChars
+	}
+	return d.SummaryChars
+}
+
+// SummaryTurnCount is desk.summary_turns with its default filled in.
+func (d Desk) SummaryTurnCount() int {
+	if d.SummaryTurns == nil {
+		return DefaultSummaryTurns
+	}
+	return *d.SummaryTurns
+}
+
+// ToolOutputCap is desk.tool_output_chars with its default filled in.
+func (d Desk) ToolOutputCap() int {
+	if d.ToolOutputChars == 0 {
+		return DefaultToolOutputChars
+	}
+	return d.ToolOutputChars
 }
 
 // desk.wake's choices.
@@ -371,6 +443,7 @@ func (c Config) Validate() error {
 	if badModel(c.Desk.Model) {
 		errs = append(errs, fmt.Errorf("desk.model: %q is not a model name", c.Desk.Model))
 	}
+	errs = append(errs, c.Desk.validate()...)
 	if b := c.OpenCode.Bin; b != strings.TrimSpace(b) {
 		errs = append(errs, fmt.Errorf("opencode.bin: %q has blanks around it", b))
 	}
@@ -392,6 +465,29 @@ func (c Config) Validate() error {
 		errs = append(errs, c.Profile(name).validate("repos."+name)...)
 	}
 	return errors.Join(errs...)
+}
+
+func (d Desk) validate() []error {
+	var errs []error
+	if n := d.RotateAt(); n != 0 && n < MinRotateTokens {
+		errs = append(errs, fmt.Errorf("desk.rotate_tokens: %d; at least %d, or 0 to never rotate on size", n, MinRotateTokens))
+	}
+	if d.RotateCost != nil && *d.RotateCost <= 0 {
+		errs = append(errs, fmt.Errorf("desk.rotate_cost: %v; dollars above 0, or leave it out to never rotate on cost", *d.RotateCost))
+	}
+	if d.SummaryModel != "" && badModel(d.SummaryModel) {
+		errs = append(errs, fmt.Errorf("desk.summary_model: %q is not a model name", d.SummaryModel))
+	}
+	if n := d.SummaryChars; n != 0 && n < MinSummaryChars {
+		errs = append(errs, fmt.Errorf("desk.summary_chars: %d; at least %d", n, MinSummaryChars))
+	}
+	if n := d.SummaryTurnCount(); n < 0 || n > MaxSummaryTurns {
+		errs = append(errs, fmt.Errorf("desk.summary_turns: %d; 0 to %d", n, MaxSummaryTurns))
+	}
+	if n := d.ToolOutputChars; n != 0 && n < MinToolOutputChars {
+		errs = append(errs, fmt.Errorf("desk.tool_output_chars: %d; at least %d", n, MinToolOutputChars))
+	}
+	return errs
 }
 
 // Profile returns the effective profile for a repo: its entry in Repos over Defaults.

@@ -211,3 +211,37 @@ func TestOpenCodeIdleTimeout(t *testing.T) {
 		}
 	}
 }
+
+func TestDeskRotation(t *testing.T) {
+	d := Default().Desk
+	if d.RotateAt() != DefaultRotateTokens || d.RotateUSD() != 0 || d.SummaryCap() != DefaultSummaryChars ||
+		d.SummaryTurnCount() != DefaultSummaryTurns || d.ToolOutputCap() != DefaultToolOutputChars || d.SummaryModel != "" {
+		t.Errorf("defaults = %+v", d)
+	}
+	c, err := Parse([]byte("desk:\n  rotate_tokens: 0\n  rotate_cost: 2.5\n  summary_model: haiku\n  summary_chars: 3000\n  summary_turns: 0\n  tool_output_chars: 800\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	d = c.Desk
+	if d.RotateAt() != 0 || d.RotateUSD() != 2.5 || d.SummaryModel != "haiku" || d.SummaryCap() != 3000 ||
+		d.SummaryTurnCount() != 0 || d.ToolOutputCap() != 800 {
+		t.Errorf("set = %+v", d)
+	}
+	for in, want := range map[string]string{
+		"rotate_tokens: 500":     "desk.rotate_tokens: 500; at least 50000",
+		"rotate_tokens: -1":      "desk.rotate_tokens",
+		"rotate_cost: 0":         "desk.rotate_cost",
+		"rotate_cost: -3":        "desk.rotate_cost",
+		"summary_model: \"a b\"": "desk.summary_model",
+		"summary_chars: 10":      "desk.summary_chars: 10; at least 1000",
+		"summary_turns: 99":      "desk.summary_turns: 99; 0 to 50",
+		"summary_turns: -1":      "desk.summary_turns",
+		"tool_output_chars: 100": "desk.tool_output_chars: 100; at least 500",
+		"rotate_tokens: lots":    "cannot unmarshal",
+		"rotate_after_turns: 3":  "rotate_after_turns",
+	} {
+		if _, err := Parse([]byte("desk:\n  " + in + "\n")); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: %v, want %q", in, err, want)
+		}
+	}
+}

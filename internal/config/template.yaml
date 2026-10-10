@@ -31,6 +31,20 @@
 #   ## attached (only while a client follows it, then one digest when one comes back),
 #   ## always, or never.
 #   wake: attached
+#   ## The daemon's desk is one session resumed every turn, so every turn rereads it.
+#   ## Past this many tokens of context (0: never), or past rotate_cost dollars for the
+#   ## session (unset: never), it starts a new session at the end of a turn, seeded
+#   ## with a summary Shepherd builds from its own records (see docs/desk.md).
+#   rotate_tokens: 150000
+#   # rotate_cost: 5
+#   ## A model that adds a short notes paragraph to the summary; empty leaves it out.
+#   summary_model: ""
+#   ## The summary's size, and how many of the thread's last turns it quotes.
+#   summary_chars: 6000
+#   summary_turns: 6
+#   ## What each operator tool returns to the daemon's desk, at most; the start and the
+#   ## end are kept.
+#   tool_output_chars: 4000
 
 ## OpenCode, for small mechanical edits on a local model (see docs/opencode.md).
 # opencode:
