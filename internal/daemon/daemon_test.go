@@ -534,3 +534,53 @@ func TestLaneConversationRoute(t *testing.T) {
 		t.Errorf("unknown lane: %d", code)
 	}
 }
+
+func TestHistoryRoutes(t *testing.T) {
+	s, base, _ := webDaemon(t)
+	a, _, la, _ := twoRuns(t, s)
+	ctx := context.Background()
+	if err := s.Store.PutLaneForge(ctx, store.LaneForge{LaneID: la.ID, MR: 12, MRState: "merged", MRURL: "https://x/12"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Store.SetLaneState(ctx, la.ID, store.LaneClosed); err != nil {
+		t.Fatal(err)
+	}
+	repo, err := s.Store.Repo(ctx, la.RepoID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lanesPath := fmt.Sprintf("%s?workspace_id=%d", api.PathHistoryLanes, repo.WorkspaceID)
+	runsPath := fmt.Sprintf("%s?workspace_id=%d", api.PathHistoryRuns, repo.WorkspaceID)
+
+	var lanes []api.LaneRecord
+	if code := operatorCall(t, s, base, "GET", lanesPath, &lanes); code != http.StatusOK {
+		t.Fatalf("lanes: %d", code)
+	}
+	if len(lanes) != 1 || lanes[0].ID != la.ID || lanes[0].Outcome != api.OutcomeMerged || lanes[0].MR != 12 || lanes[0].Runs < 1 {
+		t.Errorf("lanes = %+v", lanes)
+	}
+	var runs api.RunHistory
+	if code := operatorCall(t, s, base, "GET", runsPath, &runs); code != http.StatusOK {
+		t.Fatalf("runs: %d", code)
+	}
+	if runs.Count < 1 || len(runs.Runs) != runs.Count {
+		t.Errorf("runs = %+v", runs)
+	}
+
+	b := newBrowser(t, base)
+	signIn(t, s, b)
+	if resp, _ := b.do("GET", runsPath, nil); resp.StatusCode != http.StatusOK {
+		t.Errorf("browser session: %d", resp.StatusCode)
+	}
+	worker, _ := s.MintWorker(a.ID)
+	req, _ := http.NewRequest("GET", base+lanesPath, nil)
+	req.Header.Set("Authorization", "Bearer "+worker)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("worker token: %d, want 403", resp.StatusCode)
+	}
+}

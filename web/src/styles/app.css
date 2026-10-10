@@ -254,3 +254,50 @@ a.badge:hover { text-decoration: underline; }
 .requests { margin-top: var(--s-5); }
 .requests-sub { padding-left: var(--gutter); margin-bottom: var(--s-2); }
 .request-msg { white-space: pre-wrap; }
+
+/* History: the board's Finished section and the Runs page share one time filter. */
+.range { display: inline-flex; margin-left: auto; font-weight: 500; }
+.range a {
+  padding: 0.125rem var(--s-3); text-decoration: none; color: var(--muted);
+  border: 1px solid var(--control-border); margin-left: -1px;
+}
+.range a:first-child { border-radius: var(--radius) 0 0 var(--radius); margin-left: 0; }
+.range a:last-child { border-radius: 0 var(--radius) var(--radius) 0; }
+.range a:hover { background: var(--hover); color: var(--ink); }
+.range a[aria-current="true"] { background: var(--ink); border-color: var(--ink); color: var(--sheet); }
+
+.group-note { margin: 0; padding: var(--s-1) var(--pad) var(--s-2); font-size: var(--t-sm); }
+.row-finished {
+  position: relative;
+  grid-template-columns: var(--gutter) minmax(9rem, 1.3fr) minmax(6rem, 0.8fr) minmax(9rem, 1fr) 5rem 9rem 5rem;
+}
+.row-finished:hover { background: var(--hover); }
+.row-finished .row-link { text-decoration: none; }
+/* The whole row is the lane's link: the lane's name stretches over it, and the merge request's
+   link sits above that. */
+.row-finished .row-link::after { content: ""; position: absolute; inset: 0; }
+.row-finished .row-link:focus-visible { outline: none; }
+.row-finished .row-link:focus-visible::after { outline: 2px solid var(--lichen); outline-offset: -2px; }
+.row-finished .row-mr-link { position: relative; z-index: 1; font-weight: 600; }
+.row-finished:has(.row-link[aria-current="true"]) { box-shadow: inset 3px 0 0 var(--lichen); }
+.row-runs, .row-cost { color: var(--muted); text-align: right; }
+.row-end { color: var(--muted); }
+
+.page-wide { max-width: var(--measure-table); }
+.runs-total strong { color: var(--ink); font-size: var(--t-lg); font-weight: 600; }
+.filters { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-3) var(--s-4); margin: 0 0 var(--s-4); padding-left: var(--gutter); }
+.filters .range { margin-left: 0; }
+.filters label { display: inline-flex; align-items: center; gap: var(--s-2); font-size: var(--t-sm); }
+.filters select {
+  font: inherit; color: inherit; padding: 0.1875rem var(--s-2);
+  background: var(--sheet); border: 1px solid var(--control-border); border-radius: var(--radius);
+}
+.history-runs { margin-left: 0; }
+.history-runs td:first-child, .history-runs th:first-child { width: var(--gutter); }
+.history-runs .run-lane { max-width: 22rem; overflow: hidden; text-overflow: ellipsis; }
+.history-runs .run-task { max-width: 0; width: 100%; overflow: hidden; text-overflow: ellipsis; color: var(--muted); }
+
+@media (max-width: 760px) {
+  .row-finished { grid-template-columns: var(--gutter) minmax(0, 1fr) auto; }
+  .row-finished .row-repo, .row-finished .row-runs { display: none; }
+}

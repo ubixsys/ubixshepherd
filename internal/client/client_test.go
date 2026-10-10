@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/ubixsys/ubixshepherd/internal/api"
 )
@@ -57,5 +58,36 @@ func TestFeedFillsEventsForOlderDaemon(t *testing.T) {
 	}
 	if len(f.Events) != 2 || f.Events[0] != api.EventPipeline || f.Events[1] != api.EventInfo {
 		t.Errorf("events = %v", f.Events)
+	}
+}
+
+func TestHistoryQueries(t *testing.T) {
+	var got []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = append(got, r.URL.Path+"?"+r.URL.RawQuery)
+		switch r.URL.Path {
+		case api.PathHistoryLanes:
+			w.Write([]byte(`[{"id":4,"name":"l","repo":"r","state":"closed","outcome":"merged","mr":9,"runs":2,"cost_usd":1.5}]`))
+		default:
+			w.Write([]byte(`{"runs":[{"id":1,"task":"t"}],"count":1,"cost_usd":0.5,"credits":0,"agents":["claude"],"lanes":[]}`))
+		}
+	}))
+	defer srv.Close()
+	c := &Client{base: srv.URL, http: srv.Client()}
+	since := time.Date(2026, 10, 10, 8, 0, 0, 0, time.FixedZone("x", 2*3600))
+
+	lanes, err := c.LaneHistory(context.Background(), 3, "closed", since)
+	if err != nil || len(lanes) != 1 || lanes[0].Outcome != api.OutcomeMerged || lanes[0].Runs != 2 || lanes[0].CostUSD != 1.5 {
+		t.Fatalf("lanes = %+v, %v", lanes, err)
+	}
+	runs, err := c.RunHistory(context.Background(), RunHistoryQuery{WorkspaceID: 3, Agent: "claude", LaneID: 4, Since: since})
+	if err != nil || runs.Count != 1 || runs.CostUSD != 0.5 || runs.Runs[0].Task != "t" {
+		t.Fatalf("runs = %+v, %v", runs, err)
+	}
+	if got[0] != "/v1/history/lanes?since=2026-10-10T06%3A00%3A00Z&state=closed&workspace_id=3" {
+		t.Errorf("lanes query = %s", got[0])
+	}
+	if got[1] != "/v1/history/runs?agent=claude&lane_id=4&since=2026-10-10T06%3A00%3A00Z&workspace_id=3" {
+		t.Errorf("runs query = %s", got[1])
 	}
 }

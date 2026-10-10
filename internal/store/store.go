@@ -378,6 +378,91 @@ type Conversation struct {
 	Last     time.Time `json:"last"`
 }
 
+// History states for LaneHistoryFilter.State.
+const (
+	HistoryClosed = "closed"
+	HistoryOpen   = "open"
+	HistoryAll    = "all"
+)
+
+// LaneHistoryFilter selects lanes for LaneHistory. Zero fields do not filter, except
+// State, where "" means closed.
+type LaneHistoryFilter struct {
+	WorkspaceID int64
+	RepoID      int64
+	LaneID      int64
+	// State is HistoryClosed, HistoryOpen or HistoryAll. An open lane is one not closed.
+	State string
+	// Since keeps closed lanes that closed at or after it; open lanes are not filtered.
+	Since time.Time
+	Limit int
+}
+
+// LaneSummary is a lane with its repo's name, its runs' count and cost, and the forge's
+// last word on its branch. Closed lanes come newest closed first, others by name.
+type LaneSummary struct {
+	Lane
+	Repo string `json:"repo"`
+	// Runs counts every run in the lane; CostUSD and Credits sum their own costs.
+	Runs    int       `json:"runs"`
+	CostUSD float64   `json:"cost_usd"`
+	Credits float64   `json:"credits"`
+	Forge   LaneForge `json:"forge"`
+}
+
+// RunHistoryFilter selects runs for RunHistory. Zero fields do not filter.
+type RunHistoryFilter struct {
+	WorkspaceID int64
+	RepoID      int64
+	LaneID      int64
+	Agent       string
+	// State is a run state, or "" for every state.
+	State string
+	// Since keeps runs that started at or after it.
+	Since time.Time
+	// Limit caps the runs returned (not the totals); 0 means 1000.
+	Limit int
+}
+
+// RunSummary is a run without its prompt, with where it ran.
+type RunSummary struct {
+	ID        int64      `json:"id"`
+	LaneID    int64      `json:"lane_id"`
+	Repo      string     `json:"repo"`
+	Lane      string     `json:"lane"`
+	LaneState string     `json:"lane_state"`
+	Agent     string     `json:"agent"`
+	Model     string     `json:"model,omitempty"`
+	State     string     `json:"state"`
+	Commits   int        `json:"commits"`
+	CostUSD   float64    `json:"cost_usd,omitempty"`
+	Credits   float64    `json:"credits,omitempty"`
+	Started   time.Time  `json:"started"`
+	Ended     *time.Time `json:"ended,omitempty"`
+	// Task is the first line of the run's prompt, clipped.
+	Task string `json:"task"`
+}
+
+// HistoryLane names a lane that has runs in a range, for a filter.
+type HistoryLane struct {
+	ID   int64  `json:"id"`
+	Repo string `json:"repo"`
+	Name string `json:"name"`
+}
+
+// RunHistory is RunHistory's answer.
+type RunHistory struct {
+	Runs []RunSummary
+	// Count, CostUSD and Credits cover every matching run, not just those in Runs.
+	Count   int
+	CostUSD float64
+	Credits float64
+	// Agents and Lanes are what the range (since, workspace, repo, state) holds, before
+	// the agent and lane filters, so a filter can offer the other choices.
+	Agents []string
+	Lanes  []HistoryLane
+}
+
 // Store is Shepherd's state.
 type Store interface {
 	// SaveWorkspace creates the workspace at ws.Path, or renames the one already there,
@@ -452,6 +537,13 @@ type Store interface {
 	DeskHistory(ctx context.Context, workspaceID, before int64, limit int) ([]DeskEvent, error)
 	// TrimDeskEvents keeps a workspace's newest keep desk events and deletes the rest.
 	TrimDeskEvents(ctx context.Context, workspaceID int64, keep int) error
+
+	// LaneHistory returns lanes with their run counts, cost and forge state, for the
+	// history views: read-only, closed lanes included.
+	LaneHistory(ctx context.Context, f LaneHistoryFilter) ([]LaneSummary, error)
+	// RunHistory returns runs newest first with the cost of every run that matches, and
+	// what the range holds to filter by. Read-only.
+	RunHistory(ctx context.Context, f RunHistoryFilter) (RunHistory, error)
 
 	// LaneForge returns a zero value (with LaneID set) for a lane the forge never saw.
 	LaneForge(ctx context.Context, laneID int64) (LaneForge, error)

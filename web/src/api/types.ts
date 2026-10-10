@@ -233,3 +233,43 @@ export interface DeskTurnAccepted {
 export interface ApiError {
   error: string
 }
+
+/** How a closed lane ended: what the forge last said about its merge request. */
+export type LaneOutcome = 'merged' | 'mr_closed' | 'dropped' | 'no_mr'
+
+/** A lane in the history (GET /v1/history/lanes): its runs' count and cost, and how a closed one ended. */
+export interface LaneRecord extends LaneView {
+  outcome?: LaneOutcome
+  runs: number
+  cost_usd: number
+  credits?: number
+}
+
+/** A run in the history, without its prompt; task is the prompt's first line. */
+export interface RunRecord {
+  id: number
+  lane_id: number
+  repo: string
+  lane: string
+  lane_state: LaneState
+  agent: string
+  model?: string
+  state: RunState
+  commits: number
+  cost_usd?: number
+  credits?: number
+  started: string
+  ended?: string
+  task: string
+}
+
+/** GET /v1/history/runs: count and cost cover every matching run, runs may be cut at the limit. */
+export interface RunHistory {
+  runs: RunRecord[]
+  count: number
+  cost_usd: number
+  credits: number
+  /** What the range holds before the agent and lane filters, to offer as choices. */
+  agents: string[]
+  lanes: { id: number; repo: string; name: string }[]
+}

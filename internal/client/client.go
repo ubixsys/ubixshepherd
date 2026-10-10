@@ -212,6 +212,51 @@ func (c *Client) Runs(ctx context.Context, laneID int64, state string, limit int
 	return out, c.do(ctx, http.MethodGet, q, nil, &out)
 }
 
+// LaneHistory lists lanes with their runs' count and cost and how closed ones ended.
+// state is "closed" (the default), "open" or "all"; a zero since does not filter.
+func (c *Client) LaneHistory(ctx context.Context, workspaceID int64, state string, since time.Time) ([]api.LaneRecord, error) {
+	var out []api.LaneRecord
+	v := url.Values{"workspace_id": {fmt.Sprint(workspaceID)}}
+	if state != "" {
+		v.Set("state", state)
+	}
+	if !since.IsZero() {
+		v.Set("since", since.UTC().Format(time.RFC3339))
+	}
+	return out, c.do(ctx, http.MethodGet, api.PathHistoryLanes+"?"+v.Encode(), nil, &out)
+}
+
+// RunHistoryQuery filters Client.RunHistory; zero fields do not filter.
+type RunHistoryQuery struct {
+	WorkspaceID int64
+	RepoID      int64
+	LaneID      int64
+	Agent       string
+	State       string
+	Since       time.Time
+	Limit       int
+}
+
+// RunHistory lists runs newest first with the total cost of every run that matches.
+func (c *Client) RunHistory(ctx context.Context, q RunHistoryQuery) (api.RunHistory, error) {
+	var out api.RunHistory
+	v := url.Values{"workspace_id": {fmt.Sprint(q.WorkspaceID)}}
+	for k, n := range map[string]int64{"repo_id": q.RepoID, "lane_id": q.LaneID, "limit": int64(q.Limit)} {
+		if n != 0 {
+			v.Set(k, fmt.Sprint(n))
+		}
+	}
+	for k, s := range map[string]string{"agent": q.Agent, "state": q.State} {
+		if s != "" {
+			v.Set(k, s)
+		}
+	}
+	if !q.Since.IsZero() {
+		v.Set("since", q.Since.UTC().Format(time.RFC3339))
+	}
+	return out, c.do(ctx, http.MethodGet, api.PathHistoryRuns+"?"+v.Encode(), nil, &out)
+}
+
 func (c *Client) Run(ctx context.Context, id int64) (api.RunView, error) {
 	var out api.RunView
 	return out, c.do(ctx, http.MethodGet, api.PathRun(id), nil, &out)

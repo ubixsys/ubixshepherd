@@ -143,6 +143,9 @@ func (s *Server) Handler() http.Handler {
 	handle("POST /v1/repos/{id}/hook", operatorOnly, s.repoHook)
 	handle("POST "+api.PathRuns, desk, s.withRunner(s.startRun))
 	handle("GET "+api.PathRuns, desk, s.listRuns)
+	// Read-only history: closed lanes with their outcome and cost, and every run in a range.
+	handle("GET "+api.PathHistoryLanes, desk, api.HistoryLanes(s.Store))
+	handle("GET "+api.PathHistoryRuns, desk, api.HistoryRuns(s.Store))
 	handle("GET "+api.PathRuns+"/{id}", desk|own, s.getRun)
 	handle("GET "+api.PathRuns+"/{id}/log", desk|own, s.runLog)
 	handle("POST "+api.PathRuns+"/{id}/stop", desk, s.withRunner(s.stopRun))

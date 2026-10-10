@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
-import { api } from '../api/client'
-import type { LaneView, RequestView, RunView } from '../api/types'
+import { api, history } from '../api/client'
+import type { LaneRecord, LaneView, RequestView, RunView } from '../api/types'
 import { EventGlyph, Glyph } from '../components/Glyph'
 import { MrBadge } from '../components/MrBadge'
 import { clockTime, duration, runCost, shortSha, since } from '../format'
 import { boardItems, GROUP_NAMES } from '../model/board'
+import { ending } from '../model/history'
 import { aboutLane, type Refs } from '../model/feed'
 import { GROUP_MARKS } from '../model/groups'
 import { useNow } from '../hooks'
@@ -41,9 +42,25 @@ export function LanePage({ id, conversation }: { id: number; conversation?: (lan
   const now = useNow()
   const [data, setData] = useState<LaneData | null>(null)
   const [error, setError] = useState<string | null>(null)
-  // The daemon lists open lanes only; a closed lane is known from its runs.
+  // The daemon lists open lanes only; a closed lane is read from its history record, or
+  // failing that (an older daemon) known from its runs.
   const listed = snap.lanes.find((l) => l.id === id)
-  const lane = listed ?? (data?.runs[0] ? closedLane(id, data.runs[0]) : undefined)
+  const [record, setRecord] = useState<LaneRecord | null>(null)
+  const unlisted = listed === undefined
+  const feedId = snap.feed.at(-1)?.id
+  useEffect(() => {
+    if (!unlisted) return
+    let current = true
+    history.lane(id).then(
+      (rs) => current && setRecord(rs[0] ?? null),
+      () => {},
+    )
+    return () => {
+      current = false
+    }
+  }, [id, unlisted, feedId])
+  const lane: LaneView | undefined = listed ?? record ?? (data?.runs[0] ? closedLane(id, data.runs[0]) : undefined)
+  const known = listed ?? record
 
   // Reload the lane's runs and what the feed's refs point at whenever the feed moves.
   const feedLast = snap.feed.at(-1)?.id ?? 0
@@ -106,12 +123,13 @@ export function LanePage({ id, conversation }: { id: number; conversation?: (lan
             <code>{lane.branch}</code>
             {lane.base && <> onto <code>{lane.base}</code></>}
           </span>
-          {listed && <span>{lane.state === 'closed' ? `closed ${since(lane.closed, now)} ago` : `opened ${since(lane.created, now)} ago`}</span>}
+          {known && <span>{lane.state === 'closed' ? `closed ${since(lane.closed, now)} ago` : `opened ${since(lane.created, now)} ago`}</span>}
+          {record && lane.state === 'closed' && <span title={ending(record).title}>{ending(record).text}</span>}
           {group && <span>{GROUP_NAMES[group]}</span>}
         </p>
       </header>
 
-      {!listed && (
+      {!known && (
         <p className="lane-note faint">
           This lane is closed or not listed by the daemon, so its scope and merge request are not shown; its runs and
           timeline are.

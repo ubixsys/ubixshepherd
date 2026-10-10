@@ -1,9 +1,9 @@
 # Shepherd web UI
 
 A browser client of the Shepherd daemon's HTTP API, like the CLI and `shepherd chat`. It
-shows the board (lanes grouped by what they need from you, with the terminal dock's rules),
-a lane's runs and timeline, the open decisions, any run's log, and the front desk's chat,
-live. What it changes is a decision's answer and what you say to the front desk, only from
+shows the board (lanes grouped by what they need from you, with the terminal dock's rules,
+and below them the lanes that finished), a lane's runs and timeline, the open decisions,
+every run, any run's log, and the front desk's chat, live. What it changes is a decision's answer and what you say to the front desk, only from
 your click or your Enter.
 
 Vite, React 19 and TypeScript (strict). No router, no state library, no CSS framework.
@@ -29,6 +29,29 @@ the daemon's config (`daemon.listen: 127.0.0.1:7400`), then:
 ssh -L 7400:127.0.0.1:7400 HOST      # leave it open
 ssh HOST shepherd web --print        # open the printed link here
 ```
+
+## History
+
+The board ends with a **Finished** section: lanes closed in the chosen range, newest first,
+each with how it ended (**merged** with its merge request's number and link, **MR closed**,
+**dropped** for a lane closed while its merge request was still open, or **closed, no MR**),
+its number of runs, its cost and when it closed. A row opens the lane page, which works for
+a closed lane too. The **Runs** page lists every run in the range with its agent, lane,
+outcome, commits, cost, start, duration and the first line of its task, filtered by agent and
+by lane, and totals the spend for the range.
+
+Both take **Today** (since local midnight, the default) or **Last 7 days**. The choice is in
+the address (`#/?range=week`, `#/runs?range=week&agent=claude&lane=12`), so a reload or a
+shared link keeps it. They read two endpoints beyond `/v1/lanes` and `/v1/runs`, which
+list open lanes and the newest 200 runs:
+
+| Endpoint | Answers |
+|---|---|
+| `GET /v1/history/lanes?workspace_id=&state=&since=` | Lanes with run count, cost and outcome. `state` is `closed` (default), `open` or `all`; `since` (RFC 3339) keeps lanes closed at or after it. `lane_id=` returns one lane in any state. |
+| `GET /v1/history/runs?workspace_id=&since=&agent=&lane_id=&state=` | Runs newest first, without prompts, with the count and cost of every match and the agents and lanes the range holds. |
+
+The daemon does not record whether a close was forced, so a lane's outcome is the forge's
+last word on its merge request.
 
 ## Build and develop it
 
