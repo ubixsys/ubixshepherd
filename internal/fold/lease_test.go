@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/ubixsys/ubixshepherd/internal/config"
+	"github.com/ubixsys/ubixshepherd/internal/store"
 )
 
 func TestOverlappingScopeRefused(t *testing.T) {
@@ -227,5 +228,76 @@ func TestHookChainedInATrackedHooksDir(t *testing.T) {
 		if strings.Contains(n, "not enforced") {
 			t.Errorf("a chained hook was reported as not enforcing: %s", n)
 		}
+	}
+}
+
+// rebasedLane opens a lane with one pushed in-scope commit, lands two commits on main
+// from another clone, then rebases the lane onto them. It returns the lane and the ref a
+// force push of the rebased branch would hand the hook: RemoteSHA is the old remote tip.
+// With stale, the local origin/main is put back to where it was before the rebase.
+func rebasedLane(t *testing.T, f *fixture, stale bool) (store.Lane, PushRef) {
+	t.Helper()
+	l := f.open("reb")
+	f.commit(l.Worktree, "src/a.go")
+	gitT(t, l.Worktree, "push", "-q", "origin", "HEAD:reb")
+	old := gitT(t, l.Worktree, "rev-parse", "HEAD")
+	was := gitT(t, l.Worktree, "rev-parse", "origin/main")
+
+	seed := filepath.Join(filepath.Dir(f.origin), "seed")
+	f.commit(seed, "docs/dev1.md")
+	f.commit(seed, "ci/dev2.yml")
+	gitT(t, seed, "push", "-q", "origin", "HEAD:main")
+
+	gitT(t, l.Worktree, "fetch", "-q", "origin")
+	gitT(t, l.Worktree, "rebase", "-q", "origin/main")
+	if stale {
+		gitT(t, l.Worktree, "update-ref", "refs/remotes/origin/main", was)
+	}
+	r := pushRef(t, l.Worktree, "reb")
+	r.RemoteSHA = old
+	return l, r
+}
+
+func TestCheckPushAfterRebaseJudgesOnlyTheLanesChanges(t *testing.T) {
+	for _, stale := range []bool{false, true} {
+		f := newFixture(t)
+		ctx := context.Background()
+		l, r := rebasedLane(t, f, stale)
+		v, err := f.fold.CheckPush(ctx, &l, &f.repo, l.Worktree, []PushRef{r})
+		if err != nil || !v.OK {
+			t.Errorf("force push after rebase (stale origin/main=%v): %+v %v", stale, v, err)
+		}
+	}
+}
+
+func TestCheckPushAfterRebaseStillRefusesStrayChanges(t *testing.T) {
+	for _, stale := range []bool{false, true} {
+		f := newFixture(t)
+		ctx := context.Background()
+		l, r := rebasedLane(t, f, stale)
+		f.commit(l.Worktree, "docs/stray.md")
+		r.LocalSHA = gitT(t, l.Worktree, "rev-parse", "HEAD")
+		v, _ := f.fold.CheckPush(ctx, &l, &f.repo, l.Worktree, []PushRef{r})
+		if v.OK || len(v.Problems) != 1 || !strings.Contains(v.Problems[0], "docs/stray.md") ||
+			strings.Contains(v.Problems[0], "dev1.md") || strings.Contains(v.Problems[0], "dev2.yml") {
+			t.Errorf("stray change after rebase (stale=%v): %+v", stale, v)
+		}
+	}
+}
+
+func TestCheckPushFirstPushAfterRebaseAndFastForward(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	l, r := rebasedLane(t, f, true)
+	r.RemoteSHA = strings.Repeat("0", 40) // a first push of the rebased branch
+	if v, err := f.fold.CheckPush(ctx, &l, &f.repo, l.Worktree, []PushRef{r}); err != nil || !v.OK {
+		t.Errorf("first push: %+v %v", v, err)
+	}
+	f.commit(l.Worktree, "docs/x.md")
+	gitT(t, l.Worktree, "push", "-q", "-f", "origin", "HEAD~1:reb")
+	r.RemoteSHA = gitT(t, l.Worktree, "rev-parse", "HEAD~1")
+	r.LocalSHA = gitT(t, l.Worktree, "rev-parse", "HEAD")
+	if v, _ := f.fold.CheckPush(ctx, &l, &f.repo, l.Worktree, []PushRef{r}); v.OK || !strings.Contains(v.Problems[0], "docs/x.md") {
+		t.Errorf("fast-forward with a stray file: %+v", v)
 	}
 }

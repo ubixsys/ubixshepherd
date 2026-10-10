@@ -119,9 +119,12 @@ func (f *Fold) CheckPushTo(ctx context.Context, lane *store.Lane, repo *store.Re
 				lane.Name, lane.Branch, strings.TrimPrefix(r.RemoteRef, "refs/heads/")))
 			continue
 		}
-		from, err := pushBase(ctx, dir, lane, r)
+		from, note, err := pushBase(ctx, dir, lane, r)
 		if err != nil {
 			return v, err
+		}
+		if note != "" {
+			v.Notes = append(v.Notes, note)
 		}
 		out, err := git.Run(ctx, dir, "diff", "--name-only", "--no-renames", from, r.LocalSHA)
 		if err != nil {
@@ -138,7 +141,7 @@ func (f *Fold) CheckPushTo(ctx context.Context, lane *store.Lane, repo *store.Re
 				lane.Name, strings.Join(lane.Scope, ", "), strings.Join(firstLinesN(outside, 20), "\n    ")))
 		}
 		if repo != nil {
-			bad, err := forbiddenMessage(ctx, dir, from, r.LocalSHA, prof.Forbid)
+			bad, err := forbiddenMessage(ctx, dir, newCommitsFrom(ctx, dir, from, r), r.LocalSHA, prof.Forbid)
 			if err != nil {
 				return v, err
 			}
@@ -193,17 +196,45 @@ func forbiddenMessage(ctx context.Context, dir, from, to string, patterns []stri
 	return "", nil
 }
 
-// pushBase is where the pushed changes start: the remote's current tip when the branch
-// exists there and is known locally, otherwise the fork point from the lane's base.
-func pushBase(ctx context.Context, dir string, lane *store.Lane, r PushRef) (string, error) {
-	if !zero(r.RemoteSHA) && git.Ok(ctx, dir, "cat-file", "-e", r.RemoteSHA+"^{commit}") {
-		return r.RemoteSHA, nil
+// newCommitsFrom is where the commits this push adds start, for judging messages: the
+// remote's tip when the push fast-forwards it, so commits already there are not judged
+// again, and otherwise (new branch, rebase) the lane's fork point from base.
+func newCommitsFrom(ctx context.Context, dir, forkPoint string, r PushRef) string {
+	if !zero(r.RemoteSHA) && git.Ok(ctx, dir, "merge-base", "--is-ancestor", r.RemoteSHA, r.LocalSHA) {
+		return r.RemoteSHA
 	}
+	return forkPoint
+}
+
+// pushBase is where the lane's own changes start: the merge-base of the pushed tip and
+// the repo's base branch on origin. It is never the remote's old tip for the branch: after
+// a rebase and force push the old tip is on the other side of every commit the base
+// gained, so a diff from it would count the base's work as the lane's.
+//
+// The base is fetched first, so a rebase onto a commit the local origin/<base> has not
+// seen yet still finds the new fork point; a stale ref would put the merge-base back
+// before it. If the fetch fails the local ref is used and the note says the check may
+// over-report. With no base ref at all it falls back to the remote's old tip, then to the
+// root, which over-reports rather than waving anything through.
+func pushBase(ctx context.Context, dir string, lane *store.Lane, r PushRef) (from, note string, err error) {
 	base := lane.Base
-	if git.RefExists(ctx, dir, "refs/remotes/origin/"+base) {
-		base = "origin/" + base
+	if git.HasRemote(ctx, dir, "origin") {
+		if _, ferr := git.Run(ctx, dir, "fetch", "--quiet", "origin", base); ferr != nil {
+			note = fmt.Sprintf("could not fetch origin/%s (%v); judging scope against the last known copy, which may be stale", base, ferr)
+		}
+		if git.RefExists(ctx, dir, "refs/remotes/origin/"+base) {
+			base = "origin/" + base
+		}
 	}
-	return git.Run(ctx, dir, "merge-base", base, r.LocalSHA)
+	if git.RefExists(ctx, dir, base) {
+		if mb, merr := git.Run(ctx, dir, "merge-base", base, r.LocalSHA); merr == nil && mb != "" {
+			return mb, note, nil
+		}
+	}
+	if !zero(r.RemoteSHA) && git.Ok(ctx, dir, "cat-file", "-e", r.RemoteSHA+"^{commit}") {
+		return r.RemoteSHA, note, nil
+	}
+	return "", "", fmt.Errorf("no base branch %s to judge lane %s's push against", lane.Base, lane.Name)
 }
 
 func firstLinesN(s []string, n int) []string {
