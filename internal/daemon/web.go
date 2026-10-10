@@ -19,7 +19,7 @@ package daemon
 //   - The operator token leaking through the browser. The browser never sees it: the CLI
 //     trades it for a one-time sign-in code (random, a minute long, single use, compared
 //     in constant time), and the code for a session cookie (random, HttpOnly,
-//     SameSite=Strict, Path=/v1, 12 hours, kept only in the daemon's memory, revocable).
+//     SameSite=Strict, Path=/v1, 12 hours, kept in the store only as a hash, revocable).
 //     The code is in the link's query, which the request log never records (it logs the
 //     path), and the exchange redirects at once with no-referrer.
 //   - Clickjacking an answer: pages refuse framing (CSP frame-ancestors and
@@ -36,8 +36,10 @@ package daemon
 // remote access is later work and off by default.
 
 import (
+	"context"
 	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
@@ -49,6 +51,7 @@ import (
 	"time"
 
 	"github.com/ubixsys/ubixshepherd/internal/api"
+	"github.com/ubixsys/ubixshepherd/internal/store"
 	"github.com/ubixsys/ubixshepherd/internal/webui"
 )
 
@@ -66,14 +69,23 @@ const (
 	// that the oldest goes.
 	maxSigninCodes = 16
 	maxWebSessions = 32
+	// webSeenEvery is the least time between writes of a session's last-seen time, so
+	// page loads do not each write to the store.
+	webSeenEvery = time.Minute
 )
 
 // webAuth holds the sign-in codes and browser sessions, by the SHA-256 of their values:
-// the raw values are handed out once and never kept. A restart ends them all.
+// the raw values are handed out once and never kept. Sessions are kept in the store too,
+// so they survive a restart; sign-in codes are memory only, a minute long.
 type webAuth struct {
-	mu       sync.Mutex
-	codes    []signinCode
+	mu    sync.Mutex
+	codes []signinCode
+	// st keeps the sessions; nil keeps them in memory only. They are loaded on first use.
+	st       store.Store
+	loaded   bool
 	sessions map[[32]byte]*webSession
+	// warn reports a store failure; memory stays authoritative.
+	warn func(msg string, err error)
 	// now is the clock, for tests.
 	now func() time.Time
 }
@@ -84,9 +96,77 @@ type signinCode struct {
 }
 
 type webSession struct {
-	hash    [32]byte
-	csrf    string
+	hash     [32]byte
+	csrf     string
+	port     string
+	created  time.Time
+	lastSeen time.Time
+	// saved is when lastSeen was last written to the store.
+	saved   time.Time
 	expires time.Time
+}
+
+func (ws *webSession) key() string { return hex.EncodeToString(ws.hash[:]) }
+
+func (a *webAuth) warnf(msg string, err error) {
+	if a.warn != nil {
+		a.warn(msg, err)
+	}
+}
+
+// load reads the live sessions from the store, once; a failure is tried again on the next
+// call. The caller holds mu.
+func (a *webAuth) load() {
+	if a.loaded || a.st == nil {
+		return
+	}
+	if a.sessions == nil {
+		a.sessions = map[[32]byte]*webSession{}
+	}
+	rows, err := a.st.LiveWebSessions(context.Background(), a.clock())
+	if err != nil {
+		a.warnf("web sessions not loaded", err)
+		return
+	}
+	a.loaded = true
+	for _, r := range rows {
+		raw, err := hex.DecodeString(r.Hash)
+		if err != nil || len(raw) != 32 {
+			continue
+		}
+		ws := &webSession{csrf: r.CSRF, port: r.Port, created: r.Created, lastSeen: r.LastSeen, saved: r.LastSeen, expires: r.Expires}
+		copy(ws.hash[:], raw)
+		a.sessions[ws.hash] = ws
+	}
+}
+
+// lastPort is the listen port of the newest live session, "" if none: the port the
+// daemon tries first, so that session's cookie still names it.
+func (a *webAuth) lastPort() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.load()
+	var newest *webSession
+	now := a.clock()
+	for _, s := range a.sessions {
+		if now.Before(s.expires) && (newest == nil || s.created.After(newest.created)) {
+			newest = s
+		}
+	}
+	if newest == nil {
+		return ""
+	}
+	return newest.port
+}
+
+// forget drops a session from the store, best effort. The caller holds mu.
+func (a *webAuth) forget(ws *webSession) {
+	if a.st == nil {
+		return
+	}
+	if err := a.st.DeleteWebSession(context.Background(), ws.key()); err != nil {
+		a.warnf("web session not removed from the store", err)
+	}
 }
 
 func (a *webAuth) clock() time.Time {
@@ -138,7 +218,7 @@ func (a *webAuth) spend(code string) bool {
 }
 
 // start begins a browser session: its cookie value, and the session.
-func (a *webAuth) start() (string, *webSession, error) {
+func (a *webAuth) start(port string) (string, *webSession, error) {
 	val, err := newToken()
 	if err != nil {
 		return "", nil, err
@@ -149,6 +229,7 @@ func (a *webAuth) start() (string, *webSession, error) {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	a.load()
 	if a.sessions == nil {
 		a.sessions = map[[32]byte]*webSession{}
 	}
@@ -157,14 +238,24 @@ func (a *webAuth) start() (string, *webSession, error) {
 	for k, s := range a.sessions {
 		if !now.Before(s.expires) {
 			delete(a.sessions, k)
+			a.forget(s)
 		} else if oldest == nil || s.expires.Before(oldest.expires) {
 			oldest = s
 		}
 	}
 	if len(a.sessions) >= maxWebSessions && oldest != nil {
 		delete(a.sessions, oldest.hash)
+		a.forget(oldest)
 	}
-	ws := &webSession{hash: sha256.Sum256([]byte(val)), csrf: csrf, expires: now.Add(webSessionTTL)}
+	ws := &webSession{hash: sha256.Sum256([]byte(val)), csrf: csrf, port: port,
+		created: now, lastSeen: now, saved: now, expires: now.Add(webSessionTTL)}
+	if a.st != nil {
+		err := a.st.SaveWebSession(context.Background(), store.WebSession{
+			Hash: ws.key(), CSRF: csrf, Port: port, Created: now, LastSeen: now, Expires: ws.expires})
+		if err != nil {
+			return "", nil, fmt.Errorf("keep the session: %w", err)
+		}
+	}
 	a.sessions[ws.hash] = ws
 	return val, ws, nil
 }
@@ -176,14 +267,25 @@ func (a *webAuth) session(val string) (*webSession, bool) {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	a.load()
 	h := sha256.Sum256([]byte(val))
 	ws, ok := a.sessions[h]
 	if !ok {
 		return nil, false
 	}
-	if !a.clock().Before(ws.expires) {
+	now := a.clock()
+	if !now.Before(ws.expires) {
 		delete(a.sessions, h)
+		a.forget(ws)
 		return nil, false
+	}
+	ws.lastSeen = now
+	if a.st != nil && now.Sub(ws.saved) >= webSeenEvery {
+		if err := a.st.TouchWebSession(context.Background(), ws.key(), now); err != nil {
+			a.warnf("web session's last-seen time not saved", err)
+		} else {
+			ws.saved = now
+		}
 	}
 	return ws, true
 }
@@ -192,27 +294,59 @@ func (a *webAuth) session(val string) (*webSession, bool) {
 func (a *webAuth) end(ws *webSession) int {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	a.load()
 	if ws == nil {
 		n := len(a.sessions)
 		clear(a.sessions)
+		if a.st != nil {
+			stored, err := a.st.DeleteWebSessions(context.Background())
+			if err != nil {
+				a.warnf("web sessions not removed from the store", err)
+			}
+			n = max(n, stored)
+		}
 		return n
 	}
 	if _, ok := a.sessions[ws.hash]; !ok {
 		return 0
 	}
 	delete(a.sessions, ws.hash)
+	a.forget(ws)
 	return 1
 }
 
 // cookieName is the session cookie's name. Browsers share cookies across a host's ports,
 // so it carries the daemon's port: two daemons on one machine do not sign each other out.
 func (s *Server) cookieName() string {
-	if a := s.addr.Load(); a != nil {
-		if _, port, err := net.SplitHostPort(*a); err == nil {
-			return "shepherd_" + port
-		}
+	if port := s.listenPort(); port != "" {
+		return "shepherd_" + port
 	}
 	return "shepherd"
+}
+
+// listenPort is the port the daemon is listening on, "" before it is.
+func (s *Server) listenPort() string {
+	if a := s.addr.Load(); a != nil {
+		if _, port, err := net.SplitHostPort(*a); err == nil {
+			return port
+		}
+	}
+	return ""
+}
+
+// listen binds the configured address. Sessions outlive a restart, but a cookie is named
+// for its port, so when the port is left to the system (0) the port of the newest live
+// session is tried first; if it is taken, any free port serves and those sessions wait
+// out their expiry.
+func (s *Server) listen(addr string) (net.Listener, error) {
+	if host, port, err := net.SplitHostPort(addr); err == nil && port == "0" {
+		if last := s.web.lastPort(); last != "" && last != "0" {
+			if ln, err := net.Listen("tcp", net.JoinHostPort(host, last)); err == nil {
+				return ln, nil
+			}
+		}
+	}
+	return net.Listen("tcp", addr)
 }
 
 // allowedHost says whether a request's Host header names this machine's loopback: a
@@ -341,7 +475,7 @@ func (s *Server) webExchange(w http.ResponseWriter, r *http.Request) {
 			s.web.end(old)
 		}
 	}
-	val, ws, err := s.web.start()
+	val, ws, err := s.web.start(s.listenPort())
 	if err != nil {
 		s.fail(w, err)
 		return

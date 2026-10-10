@@ -741,6 +741,17 @@ func (r SpendRollup) Total() (usd, credits float64) {
 	return usd, credits
 }
 
+// WebSession is a browser session of the web UI. Hash is the hex SHA-256 of the session
+// cookie's value, which is never stored; Port is the listen port the cookie is named for.
+type WebSession struct {
+	Hash     string
+	CSRF     string
+	Port     string
+	Created  time.Time
+	LastSeen time.Time
+	Expires  time.Time
+}
+
 // Store is Shepherd's state.
 type Store interface {
 	// SaveWorkspace creates the workspace at ws.Path, or renames the one already there,
@@ -834,6 +845,18 @@ type Store interface {
 	RunUsage(ctx context.Context, runID int64) (Usage, error)
 	// UsageStats totals the usage of the days from to to inclusive ("2006-01-02").
 	UsageStats(ctx context.Context, from, to string) (UsageStats, error)
+
+	// SaveWebSession stores a browser session, replacing one with the same hash.
+	SaveWebSession(ctx context.Context, ws WebSession) error
+	// TouchWebSession records when a session was last used.
+	TouchWebSession(ctx context.Context, hash string, seen time.Time) error
+	// DeleteWebSession forgets one session.
+	DeleteWebSession(ctx context.Context, hash string) error
+	// DeleteWebSessions forgets every session and says how many there were.
+	DeleteWebSessions(ctx context.Context) (int, error)
+	// LiveWebSessions deletes the sessions that expired by now and returns the rest,
+	// oldest first.
+	LiveWebSessions(ctx context.Context, now time.Time) ([]WebSession, error)
 
 	// DeskEvents returns a workspace's desk events after seq, oldest first.
 	DeskEvents(ctx context.Context, workspaceID, after int64, limit int) ([]DeskEvent, error)

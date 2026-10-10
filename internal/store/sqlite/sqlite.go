@@ -271,6 +271,17 @@ var migrations = []string{
 	);
 	CREATE INDEX usage_day ON usage (day);
 	CREATE UNIQUE INDEX usage_run ON usage (run_id) WHERE run_id != 0;`,
+	// Web sessions: browser sessions that outlive a daemon restart. Keyed by the SHA-256
+	// of the cookie value (hex): the value itself is never stored. port is the listen port
+	// the session's cookie is named for.
+	`CREATE TABLE web_sessions (
+		hash      TEXT PRIMARY KEY,
+		csrf      TEXT NOT NULL,
+		port      TEXT NOT NULL DEFAULT '',
+		created   TEXT NOT NULL,
+		last_seen TEXT NOT NULL,
+		expires   TEXT NOT NULL
+	);`,
 }
 
 // DB is a SQLite-backed store.Store.

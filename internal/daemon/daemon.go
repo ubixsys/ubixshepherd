@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -69,7 +68,7 @@ type Server struct {
 	// tokens are the scoped tokens minted since start; addr is where the API listens.
 	tokens tokens
 	addr   atomic.Pointer[string]
-	// web holds browser sign-in codes and sessions (web.go).
+	// web holds browser sign-in codes and sessions (web.go); sessions persist in the store.
 	web webAuth
 }
 
@@ -79,11 +78,14 @@ func NewServer(st store.Store, cfg config.Config, cfgPath string, log *slog.Logg
 	if err != nil {
 		return nil, err
 	}
-	return &Server{
+	s := &Server{
 		Store: st, Config: cfg, ConfigPath: cfgPath, Token: tok, Log: log,
 		Fold:    &fold.Fold{Store: st, Config: cfg, ForgeFor: forge.For},
 		started: time.Now().UTC(), stop: make(chan struct{}),
-	}, nil
+	}
+	s.web.st = st
+	s.web.warn = func(msg string, err error) { s.Log.Warn(msg, "err", err) }
+	return s, nil
 }
 
 func newToken() (string, error) {
@@ -1633,7 +1635,7 @@ func (s *Server) Run(ctx context.Context, runtimePath string) error {
 	}
 	defer lock.Close()
 
-	ln, err := net.Listen("tcp", s.LiveConfig().Daemon.Listen)
+	ln, err := s.listen(s.LiveConfig().Daemon.Listen)
 	if err != nil {
 		return err
 	}
