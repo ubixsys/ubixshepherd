@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"math"
 	"regexp"
+	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -82,8 +84,11 @@ func copilotOutput(line string) Output {
 
 func plainOutput(line string) Output { return Output{Show: line} }
 
+// clock is the time budgets are counted against; tests move it.
+var clock = time.Now
+
 // Today is the local day spend is counted against.
-func Today() string { return time.Now().Format("2006-01-02") }
+func Today() string { return clock().Format("2006-01-02") }
 
 // sessionCost turns the session total a run's agent reported (in CostUSD and Credits)
 // into what this run added: the total less the session's total when the run it
@@ -152,20 +157,171 @@ func budget(cfg config.Config) float64 {
 	return *cfg.Daemon.Budget
 }
 
-// overBudget says why an automatic run must wait, or "".
-func (r *Runner) overBudget(ctx context.Context, cfg config.Config) string {
-	b := budget(cfg)
-	if b <= 0 {
-		return ""
-	}
-	spent, _, err := Spent(ctx, r.Store, cfg)
-	if err != nil || spent < b {
-		return ""
-	}
-	return fmt.Sprintf("today's spend, $%.2f, has reached the daily budget of $%.2f (daemon.budget); Shepherd holds the runs it would start on its own until tomorrow or a higher budget", spent, b)
+// The kinds of budget line.
+const (
+	LineWorkspace = "workspace"
+	LineDesk      = "desk"
+	LineProject   = "project"
+)
+
+// BudgetLine is one budget and what has been spent against it in its period.
+type BudgetLine struct {
+	// Kind is LineWorkspace, LineDesk or LineProject; Name is the project's name.
+	Kind string `json:"kind"`
+	Name string `json:"name,omitempty"`
+	// Key is the configuration key the amount comes from ("daemon.budget").
+	Key string `json:"key"`
+	// Amount is dollars per period; 0 is no cap.
+	Amount float64 `json:"amount"`
+	// Cap is config.CapSoft or config.CapHard.
+	Cap string `json:"cap"`
+	// Period is config.PeriodDay or config.PeriodMonth; Since is its first day.
+	Period string `json:"period"`
+	Since  string `json:"since"`
+	// Spent is dollars so far this period, credits priced at credit_usd.
+	Spent float64 `json:"spent"`
 }
 
-// Spend records money spent and warns, once a day each, at 80% and 100% of the budget.
+// Capped says the line has an amount to stay under.
+func (l BudgetLine) Capped() bool { return l.Amount > 0 }
+
+// Reached is spend at or past the amount.
+func (l BudgetLine) Reached() bool { return l.Capped() && l.Spent >= l.Amount }
+
+// Holds says the line holds the runs Shepherd starts itself: a hard cap, reached.
+func (l BudgetLine) Holds() bool { return l.Reached() && l.Cap == config.CapHard }
+
+// label names the period in prose.
+func (l BudgetLine) label() string {
+	if l.Period == config.PeriodMonth {
+		return "month's"
+	}
+	return "today's"
+}
+
+// who names the budget in a message.
+func (l BudgetLine) who() string {
+	switch l.Kind {
+	case LineDesk:
+		return "the front desk's"
+	case LineProject:
+		return "project " + l.Name + "'s"
+	}
+	return "the workspace's"
+}
+
+// lifts says what ends a hold.
+func (l BudgetLine) lifts() string {
+	until := "tomorrow"
+	if l.Period == config.PeriodMonth {
+		until = "the first of next month"
+	}
+	return until + ", a higher " + l.Key + ", or cap: soft"
+}
+
+// BudgetLines is every budget's spend in its period: the workspace ceiling (daily), the
+// front desk's own line, and each project's. A repo outside any project is in the
+// workspace line only, and the desk is in no project's. Lines come in that order, the
+// projects by name.
+func BudgetLines(ctx context.Context, st store.Store, cfg config.Config) ([]BudgetLine, error) {
+	today := Today()
+	cu := creditUSD(cfg)
+	price := func(usd, credits float64) float64 { return usd + credits*cu }
+	day, err := st.SpendRollup(ctx, today, today)
+	if err != nil {
+		return nil, err
+	}
+	var month *store.SpendRollup
+	since := clock().Format("2006-01") + "-01"
+	names := make([]string, 0, len(cfg.Projects))
+	for name := range cfg.Projects {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	usd, credits := day.Total()
+	lines := []BudgetLine{{Kind: LineWorkspace, Key: "daemon.budget", Amount: budget(cfg), Cap: cfg.Daemon.BudgetCapMode(),
+		Period: config.PeriodDay, Since: today, Spent: price(usd, credits)}}
+	desk := BudgetLine{Kind: LineDesk, Key: "desk.budget", Cap: cfg.Desk.BudgetCapMode(),
+		Period: config.PeriodDay, Since: today, Spent: price(day.Desk.USD, day.Desk.Credits)}
+	if cfg.Desk.Budget != nil {
+		desk.Amount = *cfg.Desk.Budget
+	}
+	lines = append(lines, desk)
+	for _, name := range names {
+		p := cfg.Project(name)
+		l := BudgetLine{Kind: LineProject, Name: name, Key: "projects." + name + ".budget", Cap: p.Budget.Cap, Period: p.Budget.Period, Since: today}
+		if p.Budget.Amount != nil {
+			l.Amount = *p.Budget.Amount
+		}
+		roll := day
+		if l.Period == config.PeriodMonth {
+			if month == nil {
+				m, err := st.SpendRollup(ctx, since, today)
+				if err != nil {
+					return nil, err
+				}
+				month = &m
+			}
+			roll, l.Since = *month, since
+		}
+		for _, rs := range roll.Repos {
+			if slices.Contains(p.Repos, rs.Repo) {
+				l.Spent += price(rs.USD, rs.Credits)
+			}
+		}
+		lines = append(lines, l)
+	}
+	return lines, nil
+}
+
+// overBudget says why an automatic run must wait, or "". It looks at the workspace
+// ceiling only: use overBudgetIn for a run in a repo that may be in a project.
+func (r *Runner) overBudget(ctx context.Context, cfg config.Config) string {
+	return r.overBudgetIn(ctx, cfg, "")
+}
+
+// overBudgetIn says why a run Shepherd would start on its own in repo (a name in
+// Config.Repos; "" for none) must wait, or "". The workspace ceiling holds first, then
+// the repo's project. Only a hard cap holds, and the desk's line never holds a run: a
+// talkative desk cannot starve a project. The caller never asks for a run the person
+// started.
+func (r *Runner) overBudgetIn(ctx context.Context, cfg config.Config, repo string) string {
+	lines, err := BudgetLines(ctx, r.Store, cfg)
+	if err != nil {
+		return ""
+	}
+	project, _ := cfg.ProjectOf(repo)
+	for _, l := range lines {
+		if !l.Holds() || l.Kind == LineDesk || (l.Kind == LineProject && l.Name != project) {
+			continue
+		}
+		if l.Kind == LineWorkspace && l.Period == config.PeriodDay {
+			return fmt.Sprintf("today's spend, $%.2f, has reached the daily budget of $%.2f (%s); Shepherd holds the runs it would start on its own until tomorrow or a higher budget", l.Spent, l.Amount, l.Key)
+		}
+		return fmt.Sprintf("%s spend, $%.2f, has reached %s budget of $%.2f (%s); Shepherd holds the runs it would start on its own until %s", l.label(), l.Spent, l.who(), l.Amount, l.Key, l.lifts())
+	}
+	return ""
+}
+
+// DeskHeld says why the front desk should not take a turn on its own, or "": its own
+// line is a hard cap and has been reached. It holds nothing else, and a turn the person
+// asks for is never held.
+func DeskHeld(ctx context.Context, st store.Store, cfg config.Config) string {
+	lines, err := BudgetLines(ctx, st, cfg)
+	if err != nil {
+		return ""
+	}
+	for _, l := range lines {
+		if l.Kind == LineDesk && l.Holds() {
+			return fmt.Sprintf("the front desk's spend, $%.2f, has reached its budget of $%.2f (%s); it takes no turns of its own until tomorrow, a higher %s, or cap: soft", l.Spent, l.Amount, l.Key, l.Key)
+		}
+	}
+	return ""
+}
+
+// Spend records money spent and warns, once per period each, at 80% and 100% of every
+// budget the spend counts toward: the workspace's, the desk's and the project's.
 func (r *Runner) Spend(ctx context.Context, sp store.Spend) error {
 	if sp.USD == 0 && sp.Credits == 0 {
 		return nil
@@ -174,32 +330,75 @@ func (r *Runner) Spend(ctx context.Context, sp store.Spend) error {
 	if err := r.Store.AddSpend(ctx, sp); err != nil {
 		return err
 	}
-	cfg := r.Conf()
-	b := budget(cfg)
-	if b <= 0 {
-		return nil
-	}
-	spent, _, err := Spent(ctx, r.Store, cfg)
+	lines, err := BudgetLines(ctx, r.Store, r.Conf())
 	if err != nil {
 		return err
+	}
+	for _, l := range lines {
+		if !l.Capped() {
+			continue
+		}
+		r.warn(ctx, l)
+	}
+	return nil
+}
+
+// warn says it once per period when l has passed 80% or 100%: the higher mark only.
+func (r *Runner) warn(ctx context.Context, l BudgetLine) {
+	scope := l.Kind
+	if l.Kind == LineProject {
+		scope += "." + l.Name
+	}
+	reached := l.title() + " reached: $%.2f of $%.2f."
+	switch {
+	case l.Cap == config.CapSoft:
+		reached += " It is a soft cap: nothing is held."
+	case l.Kind == LineDesk:
+		reached += " The desk takes no turns of its own until it lifts; turns you ask for still go."
+	default:
+		reached += " Shepherd now holds the runs it would start on its own (fixes, routed requests); runs you or the desk start still go."
+	}
+	used := "80%% of " + l.who() + " " + l.period() + " budget used: $%.2f of $%.2f."
+	if l.Kind == LineWorkspace {
+		used = "80%% of " + l.label() + " budget used: $%.2f of $%.2f."
 	}
 	for _, mark := range []struct {
 		at   float64
 		key  string
 		text string
 	}{
-		{1.0, "budget.reached." + sp.Day, "Daily budget reached: $%.2f of $%.2f. Shepherd now holds the runs it would start on its own (fixes, routed requests); runs you or the desk start still go."},
-		{0.8, "budget.warned." + sp.Day, "80%% of today's budget used: $%.2f of $%.2f."},
+		{1.0, "budget.reached." + scope + "." + l.Since, reached},
+		{0.8, "budget.warned." + scope + "." + l.Since, used},
 	} {
-		if spent < mark.at*b {
+		if l.Spent < mark.at*l.Amount {
 			continue
 		}
-		if done, _ := r.Store.Setting(ctx, mark.key); done != "" {
+		key := mark.key
+		if l.Kind == LineWorkspace { // the keys the single budget always used
+			key = strings.Replace(key, ".workspace", "", 1)
+		}
+		if done, _ := r.Store.Setting(ctx, key); done != "" {
 			break
 		}
-		r.Store.SetSetting(ctx, mark.key, "1")
-		r.feed(ctx, store.FeedBudget, 0, mark.text, spent, b)
+		r.Store.SetSetting(ctx, key, "1")
+		r.feed(ctx, store.FeedBudget, 0, mark.text, l.Spent, l.Amount)
 		break
 	}
-	return nil
+}
+
+// period is "daily" or "monthly".
+func (l BudgetLine) period() string {
+	if l.Period == config.PeriodMonth {
+		return "monthly"
+	}
+	return "daily"
+}
+
+// title starts the 100% message: "Daily budget", "Project x's monthly budget".
+func (l BudgetLine) title() string {
+	if l.Kind == LineWorkspace {
+		return "Daily budget"
+	}
+	w := l.who() + " " + l.period() + " budget"
+	return strings.ToUpper(w[:1]) + w[1:]
 }
