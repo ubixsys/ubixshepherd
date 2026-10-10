@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 )
@@ -186,6 +187,184 @@ type Spend struct {
 	Ref     int64   `json:"ref,omitempty"`
 	USD     float64 `json:"usd"`
 	Credits float64 `json:"credits,omitempty"`
+}
+
+// Usage kinds: what a usage record measures.
+const (
+	UsageRun  = "run"  // one agent run
+	UsageDesk = "desk" // one turn of the front desk
+)
+
+// LargeContext is the prompt size, in tokens, past which a request needed more than a
+// 200k window: the line a stats count of "over 200k" is drawn at.
+const LargeContext = 200_000
+
+// Usage is the tokens and context one agent run or one front desk turn used, with the
+// cost it added. Fields an agent CLI does not report are zero: Requests is 0 when no
+// token counts were read at all, so a record can tell "nothing reported" from "small".
+type Usage struct {
+	ID  int64  `json:"id,omitempty"`
+	Day string `json:"day"`
+	// Kind is UsageRun or UsageDesk. RunID is the run's id for a run; WorkspaceID and
+	// Turn are the desk's workspace and turn id for a turn.
+	Kind        string `json:"kind"`
+	RunID       int64  `json:"run_id,omitempty"`
+	WorkspaceID int64  `json:"workspace_id,omitempty"`
+	Turn        int64  `json:"turn,omitempty"`
+	Agent       string `json:"agent"`
+	// Model is the model the CLI reported, else the one asked for, else "".
+	Model string `json:"model,omitempty"`
+	// ContextWindow is the window the model ran with, where the CLI reports it.
+	ContextWindow int `json:"context_window,omitempty"`
+	// Requests counts the model requests the tokens were summed over.
+	Requests int `json:"requests,omitempty"`
+	// The four token counts, summed over the run's or turn's requests: Input is the
+	// uncached prompt, CacheRead and CacheCreation the cached prompt read and written.
+	Input         int64 `json:"input_tokens,omitempty"`
+	CacheRead     int64 `json:"cache_read_tokens,omitempty"`
+	CacheCreation int64 `json:"cache_creation_tokens,omitempty"`
+	Output        int64 `json:"output_tokens,omitempty"`
+	// PeakContext is the largest single request's prompt in the run or turn: its
+	// uncached input plus cache read plus cache creation.
+	PeakContext int64 `json:"peak_context,omitempty"`
+	// Compactions counts the times the CLI summarised the conversation to make room.
+	Compactions int `json:"compactions,omitempty"`
+	// CostUSD and Credits are what this run or turn added, as Run and Spend record them.
+	CostUSD float64   `json:"cost_usd,omitempty"`
+	Credits float64   `json:"credits,omitempty"`
+	Created time.Time `json:"created,omitempty"`
+}
+
+// Prompt is the tokens the prompts of all requests held, cached or not.
+func (u Usage) Prompt() int64 { return u.Input + u.CacheRead + u.CacheCreation }
+
+// Measured says the CLI reported token counts for this record.
+func (u Usage) Measured() bool { return u.Requests > 0 || u.Prompt()+u.Output > 0 }
+
+// UsageTotals add up usage records. Count is every record; Measured those with token
+// counts, and the peak, the over-200k count and the tokens cover only those.
+type UsageTotals struct {
+	Count         int   `json:"count"`
+	Measured      int   `json:"measured"`
+	Input         int64 `json:"input_tokens"`
+	CacheRead     int64 `json:"cache_read_tokens"`
+	CacheCreation int64 `json:"cache_creation_tokens"`
+	Output        int64 `json:"output_tokens"`
+	// PeakContext is the largest peak of any record; Over200k counts the records whose
+	// peak was above LargeContext. ContextWindow is the largest window reported.
+	PeakContext   int64   `json:"peak_context"`
+	Over200k      int     `json:"over_200k"`
+	ContextWindow int     `json:"context_window,omitempty"`
+	Compactions   int     `json:"compactions"`
+	CostUSD       float64 `json:"cost_usd"`
+	Credits       float64 `json:"credits,omitempty"`
+}
+
+// Add folds one record into the totals.
+func (t *UsageTotals) Add(u Usage) {
+	t.Count++
+	t.CostUSD += u.CostUSD
+	t.Credits += u.Credits
+	t.ContextWindow = max(t.ContextWindow, u.ContextWindow)
+	if !u.Measured() {
+		return
+	}
+	t.Measured++
+	t.Input += u.Input
+	t.CacheRead += u.CacheRead
+	t.CacheCreation += u.CacheCreation
+	t.Output += u.Output
+	t.Compactions += u.Compactions
+	t.PeakContext = max(t.PeakContext, u.PeakContext)
+	if u.PeakContext > LargeContext {
+		t.Over200k++
+	}
+}
+
+// UsageGroup is the totals of one agent and model, or one lane.
+type UsageGroup struct {
+	// Key names the group: "claude opus-4" for a model, "repo/lane" for a lane.
+	Key   string `json:"key"`
+	Agent string `json:"agent,omitempty"`
+	Model string `json:"model,omitempty"`
+	Repo  string `json:"repo,omitempty"`
+	Lane  string `json:"lane,omitempty"`
+	UsageTotals
+}
+
+// UsageStats is a range of days' usage, from to to inclusive ("2006-01-02").
+type UsageStats struct {
+	From string `json:"from"`
+	To   string `json:"to"`
+	// Total covers every record; Runs the agent runs and Desk the front desk's turns.
+	Total UsageTotals `json:"total"`
+	Runs  UsageTotals `json:"runs"`
+	Desk  UsageTotals `json:"desk"`
+	// ByModel groups the runs by agent and model; ByLane by lane, in repo and lane
+	// order. DeskByModel groups the desk's turns by model. All are biggest cost first
+	// (lanes by repo and name).
+	ByModel     []UsageGroup `json:"by_model,omitempty"`
+	ByLane      []UsageGroup `json:"by_lane,omitempty"`
+	DeskByModel []UsageGroup `json:"desk_by_model,omitempty"`
+}
+
+// UsageRow is a usage record with the lane it ran in, for rolling up.
+type UsageRow struct {
+	Usage
+	Repo, Lane string
+}
+
+// RollupUsage totals rows into stats for the range from to to.
+func RollupUsage(from, to string, rows []UsageRow) UsageStats {
+	out := UsageStats{From: from, To: to}
+	models := map[string]*UsageGroup{}
+	lanes := map[string]*UsageGroup{}
+	desk := map[string]*UsageGroup{}
+	group := func(m map[string]*UsageGroup, key string, init UsageGroup) *UsageGroup {
+		g := m[key]
+		if g == nil {
+			init.Key = key
+			g = &init
+			m[key] = g
+		}
+		return g
+	}
+	for _, r := range rows {
+		out.Total.Add(r.Usage)
+		model := r.Model
+		if model == "" {
+			model = "default model"
+		}
+		if r.Kind == UsageDesk {
+			out.Desk.Add(r.Usage)
+			group(desk, model, UsageGroup{Agent: r.Agent, Model: r.Model}).Add(r.Usage)
+			continue
+		}
+		out.Runs.Add(r.Usage)
+		group(models, r.Agent+" "+model, UsageGroup{Agent: r.Agent, Model: r.Model}).Add(r.Usage)
+		name := "(no lane)"
+		init := UsageGroup{}
+		if r.Lane != "" {
+			name = r.Repo + "/" + r.Lane
+			init = UsageGroup{Repo: r.Repo, Lane: r.Lane}
+		}
+		group(lanes, name, init).Add(r.Usage)
+	}
+	flat := func(m map[string]*UsageGroup, byCost bool) []UsageGroup {
+		var gs []UsageGroup
+		for _, g := range m {
+			gs = append(gs, *g)
+		}
+		sort.Slice(gs, func(i, j int) bool {
+			if byCost && gs[i].CostUSD != gs[j].CostUSD {
+				return gs[i].CostUSD > gs[j].CostUSD
+			}
+			return gs[i].Key < gs[j].Key
+		})
+		return gs
+	}
+	out.ByModel, out.ByLane, out.DeskByModel = flat(models, true), flat(lanes, false), flat(desk, true)
+	return out
 }
 
 // Event is something an agent told Shepherd during a run.
@@ -648,6 +827,14 @@ type Store interface {
 	// the desk and the rest.
 	SpendRollup(ctx context.Context, from, to string) (SpendRollup, error)
 
+	// AddUsage records a run's or a desk turn's usage; a run has at most one record, and
+	// adding another replaces it.
+	AddUsage(ctx context.Context, u Usage) error
+	// RunUsage returns a run's usage; ErrNotFound if none was recorded.
+	RunUsage(ctx context.Context, runID int64) (Usage, error)
+	// UsageStats totals the usage of the days from to to inclusive ("2006-01-02").
+	UsageStats(ctx context.Context, from, to string) (UsageStats, error)
+
 	// DeskEvents returns a workspace's desk events after seq, oldest first.
 	DeskEvents(ctx context.Context, workspaceID, after int64, limit int) ([]DeskEvent, error)
 	// DeskHistory returns up to limit of a workspace's desk events before seq (0 for
@@ -669,4 +856,44 @@ type Store interface {
 	// Driver names the backing database, for status.
 	Driver() string
 	Close() error
+}
+
+// Tokens writes a token count the short way: 950, 187k, 1.2M.
+func Tokens(n int64) string {
+	switch {
+	case n >= 1_000_000:
+		return strings.TrimSuffix(fmt.Sprintf("%.1f", float64(n)/1e6), ".0") + "M"
+	case n >= 10_000:
+		return fmt.Sprintf("%dk", (n+500)/1000)
+	case n >= 1000:
+		return strings.TrimSuffix(fmt.Sprintf("%.1f", float64(n)/1e3), ".0") + "k"
+	}
+	return fmt.Sprint(n)
+}
+
+// Line is a record's usage on one line: model, peak context against the window, the
+// token counts and compactions.
+func (u Usage) Line() string {
+	var parts []string
+	if u.Model != "" {
+		parts = append(parts, u.Model)
+	}
+	if u.Requests > 0 {
+		parts = append(parts, fmt.Sprintf("%d request(s)", u.Requests))
+	}
+	if u.PeakContext > 0 {
+		peak := "peak context " + Tokens(u.PeakContext)
+		if u.ContextWindow > 0 {
+			peak += " of a " + Tokens(int64(u.ContextWindow)) + " window"
+		}
+		parts = append(parts, peak)
+	} else if u.ContextWindow > 0 {
+		parts = append(parts, "window "+Tokens(int64(u.ContextWindow)))
+	}
+	parts = append(parts, fmt.Sprintf("in %s, cache read %s, cache write %s, out %s",
+		Tokens(u.Input), Tokens(u.CacheRead), Tokens(u.CacheCreation), Tokens(u.Output)))
+	if u.Compactions > 0 {
+		parts = append(parts, fmt.Sprintf("%d compaction(s)", u.Compactions))
+	}
+	return strings.Join(parts, "; ")
 }
