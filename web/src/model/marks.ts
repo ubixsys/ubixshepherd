@@ -25,6 +25,7 @@ export const EVENTS = [
   'tag',
   'release',
   'config',
+  'desk_rotated',
   'info'
 ] as const
 
@@ -61,6 +62,7 @@ export const MARKS: Record<EventKind, Mark> = {
   tag: { glyph: '#', tone: 'muted', label: 'tag' },
   release: { glyph: '▲', tone: 'muted', label: 'release' },
   config: { glyph: '~', tone: 'muted', label: 'config' },
+  desk_rotated: { glyph: '↻', tone: 'muted', label: 'desk session rotated' },
   info: { glyph: '·', tone: 'muted', label: 'note' }
 }
 

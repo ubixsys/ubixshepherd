@@ -14,7 +14,7 @@ var allEvents = []string{
 	api.EventLaneOpened, api.EventLaneClosed, api.EventRunStarted, api.EventRunEnded, api.EventReport,
 	api.EventDecisionAsked, api.EventDecisionAnswer, api.EventRequest, api.EventRequestAttention,
 	api.EventMR, api.EventPipeline, api.EventBudget, api.EventTag, api.EventRelease, api.EventConfig, api.EventInfo,
-	kindRunPassed, kindRunFailed, kindRunInterrupted, kindRunQuota, kindCommit, kindGate,
+	kindRunPassed, kindRunFailed, kindRunInterrupted, kindRunQuota, kindCommit, kindGate, kindDeskRotated,
 }
 
 // Every event has its own glyph, one cell wide, so a line of events reads without colour.

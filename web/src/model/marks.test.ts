@@ -17,6 +17,7 @@ describe('marks', () => {
   it('should return correct marks for known events', () => {
     expect(markFor('run_started')).toEqual({ glyph: '▸', tone: 'accent', label: 'run started' })
     expect(markFor('run_failed')).toEqual({ glyph: '✗', tone: 'bad', label: 'run failed' })
+    expect(markFor('desk_rotated')).toEqual({ glyph: '↻', tone: 'muted', label: 'desk session rotated' })
     expect(markFor('info')).toEqual({ glyph: '·', tone: 'muted', label: 'note' })
   })
 
