@@ -1,3 +1,5 @@
+import type { DeskApi } from '../api/desk'
+import type { Source } from '../state/desk'
 import type {
   LaneView,
   RunView,
@@ -8,7 +10,8 @@ import type {
   Status,
   LaneState,
   RunState,
-  DecisionState
+  DecisionState,
+  DeskEvent
 } from '../api/types';
 
 export function lane(o?: Partial<LaneView>): LaneView {
@@ -126,3 +129,62 @@ export function status(o?: Partial<Status>): Status {
   };
   return { ...base, ...o };
 }
+
+export function deskEvent(o?: Partial<DeskEvent>): DeskEvent {
+  const base: DeskEvent = {
+    seq: 1,
+    workspace_id: 1,
+    kind: "user",
+    text: "what is the flock doing?",
+    turn: 1,
+    origin: "human",
+    created: "2026-10-08T10:00:00Z",
+  };
+  return { ...base, ...o };
+}
+
+/** A stand-in for EventSource: the test drives open, error and events by hand. */
+export class FakeSource implements Source {
+  static all: FakeSource[] = []
+  /** The nth stream opened so far. */
+  static get(n = 0): FakeSource {
+    const s = FakeSource.all[n]
+    if (!s) throw new Error(`no stream ${n} opened`)
+    return s
+  }
+  onopen: ((ev: Event) => void) | null = null
+  onerror: ((ev: Event) => void) | null = null
+  closed = false
+  private handlers = new Map<string, ((ev: MessageEvent<string>) => void)[]>()
+  constructor(readonly url: string) {
+    FakeSource.all.push(this)
+  }
+  addEventListener(type: string, fn: (ev: MessageEvent<string>) => void) {
+    this.handlers.set(type, [...(this.handlers.get(type) ?? []), fn])
+  }
+  close() {
+    this.closed = true
+  }
+  open() {
+    this.onopen?.(new Event('open'))
+  }
+  fail() {
+    this.onerror?.(new Event('error'))
+  }
+  emit(type: string, data: unknown) {
+    for (const fn of this.handlers.get(type) ?? []) fn({ data: JSON.stringify(data) } as MessageEvent<string>)
+  }
+}
+
+export function fakeDeskApi(over: Partial<DeskApi> = {}): DeskApi {
+  return {
+    history: async () => ({ events: [], more: false }),
+    status: async () => ({ workspace_id: 1, busy: false, queued: 0, attached: 1, session: '', model: '', wake: 'attached' }),
+    turn: async () => ({ workspace_id: 1, turn: 9, ahead: 1 }),
+    interrupt: async () => ({ interrupted: true }),
+    newConversation: async () => ({}),
+    streamUrl: (ws, after) => `/stream?ws=${ws}&after=${after}`,
+    ...over,
+  }
+}
+

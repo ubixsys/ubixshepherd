@@ -5,6 +5,7 @@ import { useKeys } from './hooks'
 import { go, href, useRoute } from './router'
 import { useSnapshot } from './state/context'
 import { BoardPage } from './pages/Board'
+import { ChatPage } from './pages/Chat'
 import { DecisionsPage } from './pages/Decisions'
 import { LanePage } from './pages/Lane'
 import { LogPage } from './pages/Log'
@@ -56,6 +57,9 @@ export function App() {
             Decisions
             {decisions > 0 && <span className="nav-count tone-warn">{decisions}</span>}
           </a>
+          <a href={href.chat()} aria-current={route.page === 'chat' ? 'page' : undefined}>
+            Chat
+          </a>
         </nav>
         <p className="bar-counts" aria-live="polite">
           {GROUPS.filter((g) => n[g] > 0).map((g) => (
@@ -90,6 +94,7 @@ export function App() {
       <main className="main">
         {route.page === 'board' && <BoardPage items={items} />}
         {route.page === 'decisions' && <DecisionsPage focus={route.focus} />}
+        {route.page === 'chat' && <ChatPage />}
         {route.page === 'lane' && <LanePage key={route.id} id={route.id} />}
         {route.page === 'log' && <LogPage key={route.run} run={route.run} />}
         {route.page === 'missing' && (

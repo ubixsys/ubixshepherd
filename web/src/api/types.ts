@@ -190,6 +190,46 @@ export interface SpendToday {
   by_source: Record<string, Spend> | null
 }
 
+/** The front desk's stored event kinds (store.Desk*); a newer daemon may add more. */
+export type DeskKind = 'user' | 'system' | 'turn_start' | 'assistant' | 'tool' | 'cost' | 'error' | 'turn_end' | 'new'
+
+/** One entry of the desk conversation. A streamed "partial" piece has no seq and is never stored. */
+export interface DeskEvent {
+  seq: number
+  workspace_id: number
+  kind: string
+  text?: string
+  /** The seq of the message that started the turn this belongs to. */
+  turn?: number
+  /** Who started the turn: "human" or "system". */
+  origin?: string
+  created: string
+}
+
+export interface DeskHistory {
+  /** Oldest first. */
+  events: DeskEvent[]
+  /** Older events remain: ask again with before set to the first event's seq. */
+  more: boolean
+}
+
+export interface DeskStatus {
+  workspace_id: number
+  busy: boolean
+  queued: number
+  attached: number
+  session: string
+  model: string
+  wake: string
+}
+
+export interface DeskTurnAccepted {
+  workspace_id: number
+  turn: number
+  /** How many turns run before this one, the one in progress included. */
+  ahead: number
+}
+
 export interface ApiError {
   error: string
 }
