@@ -9,9 +9,12 @@ export function LiveProvider({ live, children }: { live: Live; children: ReactNo
     const onVisible = () => {
       if (document.visibilityState === 'visible') live.wake()
     }
+    const onOnline = () => live.wake()
     document.addEventListener('visibilitychange', onVisible)
+    window.addEventListener('online', onOnline)
     return () => {
       document.removeEventListener('visibilitychange', onVisible)
+      window.removeEventListener('online', onOnline)
       live.stop()
     }
   }, [live])
