@@ -7,12 +7,15 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/ubixsys/ubixshepherd/internal/config"
+	"unicode/utf8"
 )
 
 func mcpExchange(t *testing.T, env Env, lines ...string) []map[string]any {
 	t.Helper()
 	var out bytes.Buffer
-	if err := serveMCP(context.Background(), env, strings.NewReader(strings.Join(lines, "\n")+"\n"), &out, mcpTools(), mcpInstructions); err != nil {
+	if err := serveMCP(context.Background(), env, strings.NewReader(strings.Join(lines, "\n")+"\n"), &out, mcpTools(), mcpInstructions, 0); err != nil {
 		t.Fatal(err)
 	}
 	var resps []map[string]any
@@ -109,5 +112,51 @@ func TestMCPLaneTools(t *testing.T) {
 	text, isErr = toolText(t, resps[5])
 	if isErr || !strings.Contains(text, "closed lane feat/mcp") {
 		t.Errorf("lane_close: %v %s", isErr, text)
+	}
+}
+
+func TestCapOutput(t *testing.T) {
+	if got := capOutput("short", 500, "x"); got != "short" {
+		t.Errorf("short output changed: %q", got)
+	}
+	long := "START " + strings.Repeat("é middle ", 2000) + " END"
+	got := capOutput(long, 1000, "Read the log file.")
+	if n := len([]rune(got)); n > 1000 {
+		t.Errorf("capped to %d characters, want at most 1000", n)
+	}
+	if !strings.HasPrefix(got, "START ") || !strings.HasSuffix(got, " END") ||
+		!strings.Contains(got, "characters cut: the front desk sees at most 1000") || !strings.Contains(got, "Read the log file.") {
+		t.Errorf("capped = %q", got)
+	}
+	if !utf8.ValidString(got) {
+		t.Error("a character was split")
+	}
+}
+
+// The desk's server caps what a tool returns and says how to read more; a server with
+// no cap of its own (an external client's) returns it whole.
+func TestMCPMaxOutput(t *testing.T) {
+	h := newHarness(t, "", false)
+	help := mcpTool{Name: "help", InputSchema: obj(map[string]any{}), more: "Ask for less.",
+		args: func(map[string]any) ([]string, error) { return []string{"help"}, nil }}
+	call := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"help","arguments":{}}}` + "\n"
+	serve := func(max int) string {
+		var out bytes.Buffer
+		if err := serveMCP(context.Background(), h.env, strings.NewReader(call), &out, []mcpTool{help}, "", max); err != nil {
+			t.Fatal(err)
+		}
+		var resp map[string]any
+		json.Unmarshal(out.Bytes(), &resp)
+		text, _ := toolText(t, resp)
+		return text
+	}
+	whole := serve(0)
+	if len(whole) < 1000 || strings.Contains(whole, "characters cut") {
+		t.Fatalf("uncapped = %d characters: %q", len(whole), whole)
+	}
+	capped := serve(config.MinToolOutputChars)
+	if len([]rune(capped)) > config.MinToolOutputChars || !strings.Contains(capped, "Ask for less.") || !strings.HasPrefix(capped, whole[:50]) ||
+		!strings.HasSuffix(capped, whole[len(whole)-50:]) {
+		t.Errorf("capped = %q", capped)
 	}
 }

@@ -53,6 +53,8 @@ type mcpTool struct {
 	InputSchema map[string]any `json:"inputSchema"`
 	// args turns the call's arguments into CLI arguments.
 	args func(map[string]any) ([]string, error) `json:"-"`
+	// more says how to read what a capped output left out (see capOutput).
+	more string
 }
 
 func obj(props map[string]any, required ...string) map[string]any {
@@ -98,6 +100,7 @@ func mcpTools() []mcpTool {
 				}
 				return []string{"lane", "list", "--all"}, nil
 			},
+			more: "Pass repo to list one repo's lanes.",
 		},
 		{
 			Name:        "lane_open",
@@ -194,6 +197,7 @@ func mcpTools() []mcpTool {
 			Description: "Recent agent runs across the workspace: id, agent, lane, state, commits, age, task.",
 			InputSchema: obj(map[string]any{}),
 			args:        func(map[string]any) ([]string, error) { return []string{"run", "list", "--all"}, nil },
+			more:        "run_status with a run's id shows that run.",
 		},
 		{
 			Name:        "run_status",
@@ -206,6 +210,7 @@ func mcpTools() []mcpTool {
 				}
 				return []string{"run", "show", fmt.Sprint(int64(id)), "--with-log"}, nil
 			},
+			more: "The whole log, redacted, is the file on the log line near the top: Read it with an offset and a limit, for the part you need.",
 		},
 		{
 			Name:        "run_stop",
@@ -227,6 +232,7 @@ func mcpTools() []mcpTool {
 			args: func(a map[string]any) ([]string, error) {
 				return []string{"lane", "review", "--repo", str(a, "repo")}, nil
 			},
+			more: "Ask the person to run shepherd lane review in a terminal for the whole report.",
 		},
 		{
 			Name:        "session_list",
@@ -440,6 +446,7 @@ func runMCP(ctx context.Context, env Env, args []string) error {
 	fs := flags("mcp", env)
 	worker := fs.Bool("worker", false, "serve the worker tools, for an agent Shepherd started")
 	scoped := fs.Bool("scoped", false, "refuse to start without SHEPHERD_TOKEN (for the daemon's front desk)")
+	maxOut := fs.Int("max-output", 0, "cap what each tool returns at this many characters, keeping its start and end (the daemon's front desk passes desk.tool_output_chars)")
 	if pos, err := parse(fs, args); err != nil {
 		return err
 	} else if len(pos) > 0 {
@@ -458,10 +465,13 @@ func runMCP(ctx context.Context, env Env, args []string) error {
 		defer done()
 		env = scoped
 	}
-	if *worker {
-		return serveMCP(ctx, env, env.Stdin, env.Stdout, workerTools(), workerInstructions)
+	if *maxOut < 0 {
+		return fmt.Errorf("--max-output %d: a number of characters, or 0 for no cap of its own", *maxOut)
 	}
-	return serveMCP(ctx, env, env.Stdin, env.Stdout, mcpTools(), mcpInstructions)
+	if *worker {
+		return serveMCP(ctx, env, env.Stdin, env.Stdout, workerTools(), workerInstructions, *maxOut)
+	}
+	return serveMCP(ctx, env, env.Stdin, env.Stdout, mcpTools(), mcpInstructions, *maxOut)
 }
 
 // scopedEnv is env with its commands pointed at the daemon in SHEPHERD_URL with the
@@ -488,7 +498,8 @@ func scopedEnv(env Env) (Env, func(), error) {
 	return env, done, nil
 }
 
-func serveMCP(ctx context.Context, env Env, in io.Reader, out io.Writer, toolset []mcpTool, instructions string) error {
+// serveMCP serves toolset; maxOut > 0 caps what each tool returns (capOutput).
+func serveMCP(ctx context.Context, env Env, in io.Reader, out io.Writer, toolset []mcpTool, instructions string, maxOut int) error {
 	tools := map[string]mcpTool{}
 	var list []mcpTool
 	for _, t := range toolset {
@@ -548,7 +559,7 @@ func serveMCP(ctx context.Context, env Env, in io.Reader, out io.Writer, toolset
 				resp.Error = &rpcError{-32602, "unknown tool " + p.Name}
 				break
 			}
-			resp.Result = callTool(ctx, env, t, p.Arguments)
+			resp.Result = callTool(ctx, env, t, p.Arguments, maxOut)
 		default:
 			resp.Error = &rpcError{-32601, "method not found: " + msg.Method}
 		}
@@ -561,7 +572,7 @@ func serveMCP(ctx context.Context, env Env, in io.Reader, out io.Writer, toolset
 
 // callTool runs the tool's CLI command with output captured. A failing command is a
 // tool error the model can read and act on, not a protocol error.
-func callTool(ctx context.Context, env Env, t mcpTool, a map[string]any) map[string]any {
+func callTool(ctx context.Context, env Env, t mcpTool, a map[string]any, maxOut int) map[string]any {
 	if a == nil {
 		a = map[string]any{}
 	}
@@ -589,8 +600,32 @@ func callTool(ctx context.Context, env Env, t mcpTool, a map[string]any) map[str
 	if max := 12000; len(text) > max {
 		text = text[:2000] + "\n\n[... " + fmt.Sprint(len(text)-max) + " bytes cut ...]\n\n" + text[len(text)-(max-2000):]
 	}
+	if maxOut > 0 {
+		text = capOutput(text, maxOut, t.more)
+	}
 	return map[string]any{
 		"content": []map[string]any{{"type": "text", "text": text}},
 		"isError": isErr,
 	}
+}
+
+// capOutput keeps a tool's output within max characters for a caller that rereads it on
+// every turn (the daemon's front desk): its start, where the summary lines are, and its
+// end, where a log's outcome is, with a line saying what was cut and how to read more.
+func capOutput(text string, max int, more string) string {
+	r := []rune(text)
+	if len(r) <= max {
+		return text
+	}
+	if more == "" {
+		more = "Narrow the call if it takes arguments, or ask the person to look in a terminal."
+	}
+	note := "\n\n[... %d characters cut: the front desk sees at most %d of a tool's output (desk.tool_output_chars). " + more + " ...]\n\n"
+	room := max - len([]rune(fmt.Sprintf(note, len(r), max)))
+	if room < 2 {
+		return string(r[:max])
+	}
+	head := room * 2 / 5
+	tail := room - head
+	return string(r[:head]) + fmt.Sprintf(note, len(r)-head-tail, max) + string(r[len(r)-tail:])
 }
