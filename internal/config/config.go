@@ -63,6 +63,29 @@ type OpenCode struct {
 	// a model without a provider is run under the provider "local". "" leaves the
 	// provider to the person's own OpenCode configuration.
 	Endpoint string `yaml:"endpoint" json:"endpoint,omitempty"`
+	// IdleTimeout is how long a run may print nothing before Shepherd stops it and
+	// records it failed as hung: a duration of at least a minute, or "off". "" is
+	// DefaultOpenCodeIdle. Any output resets it.
+	IdleTimeout string `yaml:"idle_timeout" json:"idle_timeout,omitempty"`
+}
+
+// DefaultOpenCodeIdle is OpenCode's idle limit when none is configured: generous,
+// since a local model can take minutes over one step.
+const DefaultOpenCodeIdle = 10 * time.Minute
+
+// Idle is IdleTimeout as a duration; 0 means no limit.
+func (o OpenCode) Idle() time.Duration {
+	switch o.IdleTimeout {
+	case "":
+		return DefaultOpenCodeIdle
+	case "off":
+		return 0
+	}
+	d, err := time.ParseDuration(o.IdleTimeout)
+	if err != nil || d < time.Minute {
+		return DefaultOpenCodeIdle
+	}
+	return d
 }
 
 // Desk holds the front desk's settings: the daemon's, and shepherd chat's own.
@@ -350,6 +373,11 @@ func (c Config) Validate() error {
 	}
 	if b := c.OpenCode.Bin; b != strings.TrimSpace(b) {
 		errs = append(errs, fmt.Errorf("opencode.bin: %q has blanks around it", b))
+	}
+	if t := c.OpenCode.IdleTimeout; t != "" && t != "off" {
+		if d, err := time.ParseDuration(t); err != nil || d < time.Minute {
+			errs = append(errs, fmt.Errorf("opencode.idle_timeout: %q; a duration of at least 1m, or off", t))
+		}
 	}
 	if e := c.OpenCode.Endpoint; e != "" {
 		if u, err := url.Parse(e); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil {

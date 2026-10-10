@@ -39,6 +39,9 @@
 #   ## An OpenAI-compatible model host; agent.model.opencode then names the model as
 #   ## provider/model (local/qwen3-coder:30b). Empty uses your own OpenCode config.
 #   endpoint: http://localhost:11434/v1
+#   ## A run that prints nothing for this long is stopped and recorded failed (at
+#   ## least 1m, or off). Any output resets it.
+#   idle_timeout: 10m
 
 ## The profile every repo starts from.
 # defaults:

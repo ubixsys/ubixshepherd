@@ -4,6 +4,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestMissingFileIsDefault(t *testing.T) {
@@ -190,6 +191,23 @@ func TestOpenCode(t *testing.T) {
 	} {
 		if _, err := Parse([]byte(in)); err == nil {
 			t.Errorf("%s: accepted", name)
+		}
+	}
+}
+
+func TestOpenCodeIdleTimeout(t *testing.T) {
+	for in, want := range map[string]time.Duration{"": DefaultOpenCodeIdle, "off": 0, "30m": 30 * time.Minute} {
+		c, err := Parse([]byte("opencode:\n  idle_timeout: \"" + in + "\"\n"))
+		if err != nil {
+			t.Fatalf("%q: %v", in, err)
+		}
+		if got := c.OpenCode.Idle(); got != want {
+			t.Errorf("idle_timeout %q = %v, want %v", in, got, want)
+		}
+	}
+	for _, in := range []string{"10s", "soon", "-5m"} {
+		if _, err := Parse([]byte("opencode:\n  idle_timeout: " + in + "\n")); err == nil {
+			t.Errorf("idle_timeout %q accepted", in)
 		}
 	}
 }
