@@ -13,11 +13,11 @@ are yours for you, and reports back in one thread.
 > the config file, the HTTP API, the MCP tools and the hook protocol) may still change
 > between betas, and every such change is called out in [CHANGELOG.md](CHANGELOG.md); see
 > [docs/VERSIONING.md](docs/VERSIONING.md). Lanes, scope leases, the pre-push hook, tag
-> reservations, agent runs with Claude Code, Copilot and Cursor, decisions, routed
+> reservations, agent runs with Claude Code, Copilot, Cursor and OpenCode, decisions, routed
 > requests, GitLab polling and `shepherd chat` work today. GitLab is the only forge for
 > lanes, macOS and Linux are tested while Windows builds untested, and workspace-wide
 > leases, typed cross-repo work orders and triage are not built yet. The web UI in `web/`
-> is a preview the daemon does not serve. The changelog's "Known limits" has the full list,
+> is served by the daemon and opened with `shepherd web`. The changelog's "Known limits" has the full list,
 > and [docs/v1.md](docs/v1.md) and [docs/roadmap.md](docs/roadmap.md) the plan.
 
 Part of the **uBix** family of open-source systems tooling (uBixCore, uBixVault, uBixOps,
@@ -42,7 +42,7 @@ A `go install` build reports the module version Go recorded (`v0.1.0-beta.1` abo
 **From source:** clone the repo and run `make install` (below).
 
 Shepherd needs **git 2.31 or newer**, and the CLIs of the agents you want it to start (`claude`, `copilot`,
-`cursor-agent`) and of your forge (`glab`), each logged in on this machine.
+`cursor-agent`, `opencode`) and of your forge (`glab`), each logged in on this machine.
 
 **Why 2.31.** Shepherd blocks an agent's pushes by handing git rewrite rules through
 `GIT_CONFIG_COUNT` and `GIT_CONFIG_KEY_n`/`GIT_CONFIG_VALUE_n`, and git before 2.31
@@ -112,8 +112,8 @@ shepherd chat
 
 You talk to Shepherd's **front desk**: a Claude Code session Shepherd runs at the
 workspace root, resumed turn by turn, with Shepherd's operator tools and read access to
-files but no way to edit them. It delegates: it opens lanes, starts Claude Code, Copilot
-or Cursor in them, follows up, routes requests between them, and brings you what is
+files but no way to edit them. It delegates: it opens lanes, starts Claude Code, Copilot,
+Cursor or OpenCode in them, follows up, routes requests between them, and brings you what is
 yours. The thread prints inline to terminal scrollback, with recent history replayed when
 chat starts and a searchable full transcript on Ctrl-O. Replies render markdown. An
 attention-sorted dock shows counts, lane and run states, merge-request badges and decision
@@ -198,8 +198,8 @@ before the work it is for. Agents reserve with their `tag_reserve` tool.
 
 Every run records its attributable cost: Claude Code's cost in dollars, Copilot's
 credits (priced at `daemon.credit_usd`, $0.04 by default, an estimate), nothing for
-Cursor, which reports nothing. When a CLI reports a session total, Shepherd records the
-increase for that run. The front desk's turns count too. `shepherd status`, the chat's
+Cursor, which reports nothing, and 0 for OpenCode on a local model. When a CLI reports a
+session total, Shepherd records the increase for that run. The front desk's turns count too. `shepherd status`, the chat's
 status line and `run show` show it.
 
 `daemon.budget` (default $20 a day, 0 for no cap) holds the runs Shepherd would start on
@@ -322,15 +322,16 @@ shepherd run stop 7
 ```
 
 **A lane keeps its conversation.** Shepherd records each agent's session (Claude Code's
-session id, Copilot's resume id, Cursor's chat), so the next `lane run` in a lane with the
+session id, Copilot's resume id, Cursor's chat, OpenCode's session), so the next `lane run` in a lane with the
 same agent continues where it left off, with everything it already knows; `--new`
 starts fresh. `run continue` sends a follow-up to a finished run's session, and
 `run attach` opens that session interactively in the lane's worktree, where you work
 with your own permissions and the push hook still checks the scope.
 
 Agents: `claude` (Claude Code), `copilot` (GitHub Copilot CLI), `cursor` (Cursor's
-`cursor-agent`), each with its own login on this machine. The daemon owns the run, so
-closing the terminal does not stop it; `lane run` follows the output, and Ctrl-C only
+`cursor-agent`), `opencode` (OpenCode, for small mechanical edits on a local model; see
+[docs/opencode.md](docs/opencode.md)), each with its own login on this machine. The daemon
+owns the run, so closing the terminal does not stop it; `lane run` follows the output, and Ctrl-C only
 detaches.
 
 Every agent gets the same brief (its lane, branch, scope, the repo's gate) and the
@@ -356,7 +357,8 @@ shepherd run show 12                   # its reports and decisions, with the run
 ```
 
 Claude Code and Copilot get the tools by flag; Claude Code sees only Shepherd's worker
-tools, so an operator server you registered for yourself never reaches an agent. Cursor
+tools, so an operator server you registered for yourself never reaches an agent. OpenCode gets
+them in its per-run config. Cursor
 reads MCP servers only from its config file, so it needs one step, once:
 `shepherd agents setup cursor` adds a `shepherd-worker` entry to `~/.cursor/mcp.json` and
 leaves the rest alone. Cursor does not pass its environment on to the MCP servers it

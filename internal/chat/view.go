@@ -113,7 +113,7 @@ func clipTo(s string, n int) string {
 
 // tintAgents colors known agent names inside a plain line (panel / event text).
 func tintAgents(s string) string {
-	for _, a := range []string{"claude", "copilot", "cursor"} {
+	for _, a := range []string{"claude", "copilot", "cursor", "opencode"} {
 		if i := indexFold(s, a); i >= 0 {
 			before, mid, after := s[:i], s[i:i+len(a)], s[i+len(a):]
 			return before + styleAgent(a).Render(mid) + tintAgents(after)

@@ -150,7 +150,7 @@ in review. Moving terminal chat onto that desk is decided, not started.
 - ★ **The decision queue** in the owner-queue shape: decisions carry options and a
   recommendation. Browser acceptance and the test script for the human live here.
 
-**M5 Dispatch.** Partly built: adapters for Claude Code, Copilot and Cursor, deterministic
+**M5 Dispatch.** Partly built: adapters for Claude Code, Copilot, Cursor and OpenCode, deterministic
 request routing, held decisions, outcome records, per-run cost accounting, daily budgets,
 quota holds, configurable permission modes, agent push/merge autonomy and opt-in
 Shepherd shipping. Typed work orders, cross-repo orders and triage are still outstanding.

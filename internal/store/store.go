@@ -79,7 +79,7 @@ const (
 // time; empty means not known, never a guess.
 type Origin struct {
 	Via string `json:"via,omitempty"`
-	// Agent is the agent CLI behind the call (claude, copilot, cursor), when it said.
+	// Agent is the agent CLI behind the call (claude, copilot, cursor, opencode), when it said.
 	Agent string `json:"agent,omitempty"`
 	// Session is the agent's session: the run's, or the front desk's.
 	Session string `json:"session,omitempty"`
@@ -163,7 +163,7 @@ type Run struct {
 	Session string `json:"session,omitempty"`
 	Parent  int64  `json:"parent,omitempty"`
 	// CostUSD is what the agent reported in dollars (Claude Code); Credits what it
-	// reported in credits (Copilot). Zero when it reports nothing (Cursor). Always this
+	// reported in credits (Copilot). Zero when it reports nothing (Cursor, a local OpenCode model). Always this
 	// run's own cost.
 	CostUSD float64 `json:"cost_usd,omitempty"`
 	Credits float64 `json:"credits,omitempty"`
