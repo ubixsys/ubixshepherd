@@ -89,7 +89,7 @@ func TestLayoutFiles(t *testing.T) {
 	l := Layout{Home: filepath.Join("h", "s")}
 	for got, want := range map[string]string{
 		l.Config(): "config.yaml", l.Store(): "shepherd.db", l.Log(): "daemon.log",
-		l.Console(): "daemon.out", l.Runtime(): "daemon.json",
+		l.Console(): "daemon.out", l.Runtime(): "daemon.json", l.Hosts(): "hosts.yaml", l.SSHDir(): "ssh",
 	} {
 		if got != filepath.Join("h", "s", want) {
 			t.Errorf("%s, want %s under the home", got, want)

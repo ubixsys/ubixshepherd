@@ -47,6 +47,15 @@ func (l Layout) Console() string { return filepath.Join(l.Home, "daemon.out") }
 // Runtime is written by a running daemon: its address, pid and access token.
 func (l Layout) Runtime() string { return filepath.Join(l.Home, "daemon.json") }
 
+// Hosts is the client-side file naming the machines this one can reach (see
+// internal/remote). It is separate from Config, which the daemon reads and which rejects
+// keys it does not know.
+func (l Layout) Hosts() string { return filepath.Join(l.Home, "hosts.yaml") }
+
+// SSHDir holds the sockets of shared ssh connections to remote daemons. It is private to
+// the user (mode 0700), as ssh requires of a control socket's directory.
+func (l Layout) SSHDir() string { return filepath.Join(l.Home, "ssh") }
+
 // Canonical returns p as an absolute, cleaned path with symlinks resolved, so that
 // /tmp and /private/tmp on macOS, or a symlinked ~/git, compare equal. A path that does
 // not exist yet is returned absolute and cleaned.

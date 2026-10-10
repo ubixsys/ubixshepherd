@@ -19,6 +19,7 @@ import (
 
 	"github.com/ubixsys/ubixshepherd/internal/client"
 	"github.com/ubixsys/ubixshepherd/internal/paths"
+	"github.com/ubixsys/ubixshepherd/internal/remote"
 )
 
 // Env is what a command runs against, so tests can supply their own.
@@ -35,6 +36,12 @@ type Env struct {
 	Autostart bool
 	// Client names this caller in the daemon's log: cli, mcp or hook.
 	Client string
+	// Remote is the daemon on another machine this command line is aimed at, or nil for
+	// the local one. Run sets it from --host, $SHEPHERD_HOST or hosts.yaml; a command run
+	// by another (an MCP tool) inherits it, and so shares the one tunnel.
+	Remote *remoteHost
+	// selected says Run has already applied the global options to this Env.
+	selected bool
 }
 
 type command struct {
@@ -79,6 +86,8 @@ func commands() []command {
 			"shepherd mcp   (register: claude mcp add --scope user shepherd -- shepherd mcp)", runMCP},
 		{"status", "Show the daemon, its workspaces, and where you are", "shepherd status [--json]", runStatus},
 		{"where", "Show the workspace, repo and lane for a directory", "shepherd where [dir] [--json]", runWhere},
+		{"host", "List the machines this one can reach, and check that one answers",
+			"shepherd host list | check [NAME]", runHost},
 		{"version", "Print the version", "shepherd version", runVersion},
 	}
 }
@@ -105,13 +114,31 @@ func Main(args []string) int {
 	if exe, err := os.Executable(); err == nil {
 		env.Exe = exe
 	}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	// A closed terminal (SIGHUP) must end the command the way Ctrl-C does, so that Run's
+	// deferred cleanup closes any ssh tunnel instead of leaving it behind.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	defer stop()
 	return Run(ctx, env, args)
 }
 
 // Run dispatches args to a command.
 func Run(ctx context.Context, env Env, args []string) int {
+	if !env.selected {
+		g, rest, err := splitGlobals(args)
+		if err == nil {
+			env.Remote, err = selectHost(env, g)
+		}
+		if err != nil {
+			fmt.Fprintln(env.Stderr, "shepherd:", err)
+			return 2
+		}
+		args, env.selected = rest, true
+		if env.Remote != nil {
+			// Whatever ends this call, a panic included, ends the tunnel with it.
+			defer env.Remote.Close()
+			env.Cwd = client.RemoteCwd
+		}
+	}
 	if len(args) == 0 || args[0] == "help" || args[0] == "-h" || args[0] == "--help" {
 		usage(env.Stdout)
 		return 0
@@ -119,6 +146,12 @@ func Run(ctx context.Context, env Env, args []string) int {
 	for _, c := range commands() {
 		if c.name != args[0] {
 			continue
+		}
+		if env.Remote != nil {
+			if why := remoteRefusal(env.Remote, c.name, args[1:]); why != "" {
+				fmt.Fprintln(env.Stderr, "shepherd:", why)
+				return 2
+			}
 		}
 		err := c.run(ctx, env, args[1:])
 		switch {
@@ -133,7 +166,11 @@ func Run(ctx context.Context, env Env, args []string) int {
 			fmt.Fprintln(env.Stderr, "usage:", c.usage)
 			return 2
 		default:
-			fmt.Fprintln(env.Stderr, "shepherd:", err)
+			msg := err.Error()
+			if env.Remote != nil {
+				msg = remoteHint(err)
+			}
+			fmt.Fprintln(env.Stderr, "shepherd:", msg)
 			return 1
 		}
 	}
@@ -156,6 +193,11 @@ func usage(w io.Writer) {
 	}
 	fmt.Fprintln(w)
 	fmt.Fprintf(w, "Files live in ~/.shepherd, or $%s if set.\n", paths.HomeEnv)
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "To act on a daemon on another machine, over ssh, put these before the command:")
+	fmt.Fprintf(w, "  --host NAME|ssh://[user@]host[:port]  (or $%s; NAME is in ~/.shepherd/hosts.yaml)\n", remote.HostEnv)
+	fmt.Fprintf(w, "  --workspace NAME  --repo NAME         what a current directory would pick (or $%s, $%s)\n", WorkspaceEnv, RepoEnv)
+	fmt.Fprintln(w, "  --local                               ignore a default host")
 }
 
 // flags returns a FlagSet that reports errors instead of exiting, and parses
@@ -191,6 +233,10 @@ const NoAutostartEnv = "SHEPHERD_NO_AUTOSTART"
 // dial returns a client for a running daemon, starting one first if none answers and
 // autostart is allowed.
 func dial(ctx context.Context, env Env) (*client.Client, error) {
+	if env.Remote != nil {
+		// Never start a daemon on someone else's machine: the person does that there.
+		return env.Remote.client(ctx, env.Client)
+	}
 	if c, err := connect(ctx, env); err == nil {
 		return c, nil
 	}

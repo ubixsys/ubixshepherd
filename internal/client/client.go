@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -36,7 +37,19 @@ type Client struct {
 	// runtime is the daemon.json path FromRuntime remembered, so Redial can pick up a
 	// new address after the daemon restarts.
 	runtime string
+	// redial, when set, finds the daemon again by other means than the runtime file: the
+	// way a remote client follows a restarted daemon (new tunnel, new port, new token).
+	redial func() (base, token string, err error)
+	// host names the machine the daemon is on when it is not this one, for messages.
+	host string
+	// workspace and repo stand in for the current directory (see RemoteCwd).
+	workspace, repo string
 }
+
+// RemoteCwd is the "current directory" of a command that has none on the daemon's
+// machine: a remote one, or one given a workspace by name. Resolve turns it into the
+// workspace (and repo) the client was told to act on.
+const RemoteCwd = "(remote)"
 
 // New returns a client for the daemon at base (for example http://127.0.0.1:7400).
 func New(base, token string) *Client {
@@ -59,9 +72,45 @@ func FromRuntime(path string) (*Client, error) {
 	return c, nil
 }
 
-// Redial re-reads the runtime file and points the client at the address there. The
-// daemon picks a new port on each start; chat uses this after a connection failure.
+// NewRemote returns a client for a daemon reached by a transport that can be set up
+// again: redial returns the base URL and token to use now (opening a new tunnel, say),
+// and is what Redial calls. host labels the machine in error messages.
+func NewRemote(host, base, token string, redial func() (base, token string, err error)) *Client {
+	c := New(base, token)
+	c.host, c.redial = host, redial
+	return c
+}
+
+// SetScope names the workspace, and optionally the repo, that stand for the current
+// directory when a command has none (see RemoteCwd).
+func (c *Client) SetScope(workspace, repo string) {
+	c.mu.Lock()
+	c.workspace, c.repo = workspace, repo
+	c.mu.Unlock()
+}
+
+// Host is the machine a remote client talks to, empty for a local one.
+func (c *Client) Host() string {
+	if c == nil {
+		return ""
+	}
+	return c.host
+}
+
+// Redial finds the daemon again and points the client at it. The daemon picks a new
+// port and token on each start; chat calls this after a connection failure. A local
+// client re-reads the runtime file; a remote one re-resolves and re-tunnels.
 func (c *Client) Redial() error {
+	if c != nil && c.redial != nil {
+		base, token, err := c.redial()
+		if err != nil {
+			return err
+		}
+		c.mu.Lock()
+		c.base, c.token = base, token
+		c.mu.Unlock()
+		return nil
+	}
 	if c == nil || c.runtime == "" {
 		return ErrNoDaemon
 	}
@@ -130,7 +179,7 @@ func (c *Client) ShipLane(ctx context.Context, id int64) (dispatch.Shipped, erro
 	var out dispatch.Shipped
 	c.mu.RLock()
 	long := &Client{
-		Name: c.Name, base: c.base, token: c.token, runtime: c.runtime,
+		Name: c.Name, base: c.base, token: c.token, runtime: c.runtime, host: c.host,
 		http: &http.Client{Timeout: dispatch.GateTimeout + 5*time.Minute},
 	}
 	c.mu.RUnlock()
@@ -329,7 +378,52 @@ func (c *Client) SaveWorkspace(ctx context.Context, req api.SaveWorkspace) (api.
 
 func (c *Client) Resolve(ctx context.Context, path string) (api.Resolution, error) {
 	var out api.Resolution
+	if path == RemoteCwd {
+		return c.resolveScope(ctx)
+	}
 	return out, c.do(ctx, http.MethodGet, api.PathResolve+"?path="+url.QueryEscape(path), nil, &out)
+}
+
+// resolveScope answers for RemoteCwd: the workspace and repo the client was told to act
+// on, or nothing when it was told none.
+func (c *Client) resolveScope(ctx context.Context) (api.Resolution, error) {
+	c.mu.RLock()
+	wsName, repoName := c.workspace, c.repo
+	c.mu.RUnlock()
+	if wsName == "" {
+		if repoName != "" {
+			return api.Resolution{Path: RemoteCwd}, errors.New("a repo needs its workspace: add --workspace NAME")
+		}
+		return api.Resolution{Path: RemoteCwd}, nil
+	}
+	all, err := c.Workspaces(ctx)
+	if err != nil {
+		return api.Resolution{}, err
+	}
+	var names []string
+	for _, w := range all {
+		names = append(names, w.Name)
+		if w.Name != wsName {
+			continue
+		}
+		dir := w.Path
+		if repoName != "" {
+			dir = ""
+			var repos []string
+			for _, r := range w.Repos {
+				repos = append(repos, r.Name)
+				if r.Name == repoName {
+					dir = r.Path
+				}
+			}
+			if dir == "" {
+				return api.Resolution{}, fmt.Errorf("no repo %q in workspace %s (have: %s)", repoName, wsName, strings.Join(repos, ", "))
+			}
+		}
+		var res api.Resolution
+		return res, c.do(ctx, http.MethodGet, api.PathResolve+"?path="+url.QueryEscape(dir), nil, &res)
+	}
+	return api.Resolution{}, fmt.Errorf("no workspace %q on this daemon (have: %s)", wsName, strings.Join(names, ", "))
 }
 
 func (c *Client) do(ctx context.Context, method, path string, body, out any) error {
@@ -357,10 +451,16 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any) err
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
+		if c.host != "" {
+			return &unreachable{host: c.host, err: err}
+		}
 		// A stale runtime file from a daemon that died without cleaning up.
 		return fmt.Errorf("%w (%v)", ErrNoDaemon, err)
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusUnauthorized {
+		return &refused{host: c.host}
+	}
 	if resp.StatusCode/100 != 2 {
 		var e api.Error
 		if json.NewDecoder(resp.Body).Decode(&e) == nil && e.Error != "" {
@@ -370,3 +470,30 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any) err
 	}
 	return json.NewDecoder(resp.Body).Decode(out)
 }
+
+// unreachable is a remote daemon that did not answer through its tunnel. It matches
+// ErrNoDaemon so a caller that reconnects on that (the chat) does so over ssh as well.
+type unreachable struct {
+	host string
+	err  error
+}
+
+func (e *unreachable) Error() string {
+	return fmt.Sprintf("cannot reach the daemon on %s through the ssh tunnel (%v): is it running? "+
+		"a daemon that restarted is picked up by running the command again", e.host, e.err)
+}
+func (e *unreachable) Is(target error) bool { return target == ErrNoDaemon }
+func (e *unreachable) Unwrap() error        { return e.err }
+
+// refused is a daemon that did not accept the token, which usually means it restarted
+// and wrote a new one. It also matches ErrNoDaemon: reading the new token is a redial.
+type refused struct{ host string }
+
+func (e *refused) Error() string {
+	where := "the daemon"
+	if e.host != "" {
+		where = "the daemon on " + e.host
+	}
+	return where + " refused the access token (it probably restarted; a redial reads the new one)"
+}
+func (e *refused) Is(target error) bool { return target == ErrNoDaemon }
