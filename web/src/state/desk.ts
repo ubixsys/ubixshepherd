@@ -4,7 +4,7 @@
 // and is resumed from; a "partial" piece has none, is never stored, and the whole reply
 // follows as an assistant event. An EventSource cannot send headers, so it resumes by
 // ?after=, and the cookie carries the session.
-import { ApiError } from '../api/client'
+import { ApiError, NetworkError, SIGN_IN_HINT } from '../api/client'
 import { deskApi, type DeskApi } from '../api/desk'
 import type { DeskEvent } from '../api/types'
 import type { FeedEntry } from '../model/feed'
@@ -27,6 +27,10 @@ export interface DeskSnapshot {
   /** Older events remain on the daemon. */
   more: boolean
   connection: Connection
+  /** While reconnecting: when the next attempt runs (ms since the epoch), else null. */
+  retryAt: number | null
+  /** Attempts that failed since the connection was last live. */
+  failures: number
   busy: boolean
   queued: number
   sending: boolean
@@ -51,6 +55,9 @@ export interface DeskDeps {
   open(url: string): Source
   setTimeout(fn: () => void, ms: number): unknown
   clearTimeout(id: unknown): void
+  now(): number
+  /** Calls fn when the tab becomes visible or the browser comes online; returns the undo. */
+  onWake(fn: () => void): () => void
 }
 
 const browserDeps: DeskDeps = {
@@ -58,27 +65,51 @@ const browserDeps: DeskDeps = {
   open: (url) => new EventSource(url),
   setTimeout: (fn, ms) => window.setTimeout(fn, ms),
   clearTimeout: (id) => window.clearTimeout(id as number),
+  now: () => Date.now(),
+  onWake: (fn) => {
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') fn()
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    window.addEventListener('online', fn)
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible)
+      window.removeEventListener('online', fn)
+    }
+  },
 }
 
-export const BACKOFF = { min: 500, max: 15_000 }
+export const BACKOFF = { min: 1000, max: 15_000 }
+/**
+ * An EventSource shows neither a stalled stream nor a daemon that went away without
+ * closing it (its ": ping" comments never reach script), so while the stream is live the
+ * thread asks the daemon's status this often. A request that hangs counts as a failure.
+ */
+export const PROBE_EVERY = 3000
+/** How long a stream may take to open before it counts as lost. */
+export const OPEN_TIMEOUT = 8000
 /** How many stored events the page keeps; older ones are reachable by "load earlier". */
 export const KEEP = 2000
 const PAGE = 100
 const STORED = ['user', 'system', 'turn_start', 'assistant', 'tool', 'cost', 'error', 'turn_end', 'new']
 
-export const SIGN_IN_HINT = 'Run `shepherd web` in a terminal to open a new sign-in link.'
+export { SIGN_IN_HINT }
 
 export class DeskThread {
   private snap: DeskSnapshot = {
-    events: [], partial: '', loaded: false, more: false, connection: 'connecting', busy: false, queued: 0,
-    sending: false, problem: null, notice: null, loadError: null,
+    events: [], partial: '', loaded: false, more: false, connection: 'connecting', retryAt: null, failures: 0,
+    busy: false, queued: 0, sending: false, problem: null, notice: null, loadError: null,
   }
   private listeners = new Set<() => void>()
   private source: Source | null = null
   private timer: unknown = null
+  private probeTimer: unknown = null
+  private unwake: (() => void) | null = null
   private backoff = BACKOFF.min
   private after = 0
   private stopped = true
+  /** Bumped by every new attempt, so an answer to an older one is ignored. */
+  private epoch = 0
   private readonly deps: DeskDeps
 
   constructor(readonly workspaceId = 0, deps: Partial<DeskDeps> = {}) {
@@ -100,35 +131,60 @@ export class DeskThread {
   start() {
     if (!this.stopped) return
     this.stopped = false
-    void this.load()
+    this.unwake = this.deps.onWake(() => this.wake())
+    void this.resync()
   }
 
   stop() {
     this.stopped = true
+    this.epoch++
     this.deps.clearTimeout(this.timer)
+    this.deps.clearTimeout(this.probeTimer)
+    this.unwake?.()
+    this.unwake = null
     this.source?.close()
     this.source = null
   }
 
-  /** The thread so far, then the stream from its newest event. */
-  private async load() {
+  /** The tab is visible or the network is back: try now rather than wait out the backoff. */
+  wake() {
+    if (this.stopped) return
+    const c = this.snap.connection
+    if (c === 'live') {
+      this.deps.clearTimeout(this.probeTimer)
+      void this.probe()
+    } else if (c !== 'connecting' || this.timer !== null) {
+      this.backoff = BACKOFF.min
+      void this.resync()
+    }
+  }
+
+  /** Reads the newest page, merges it with what the page holds, then follows the stream. */
+  private async resync() {
+    this.deps.clearTimeout(this.timer)
+    this.timer = null
+    this.deps.clearTimeout(this.probeTimer)
+    this.source?.close()
+    this.source = null
+    const epoch = ++this.epoch
     try {
       const h = await this.deps.api.history(this.workspaceId, 0, PAGE)
-      if (this.stopped) return
-      const events = h.events
-      this.after = events.at(-1)?.seq ?? 0
-      this.set({ events, more: h.more, loaded: true, loadError: null })
+      if (this.stopped || epoch !== this.epoch) return
+      const held = this.snap.events
+      const newest = held.at(-1)?.seq ?? 0
+      const first = h.events[0]?.seq ?? 0
+      // A page that starts above what the page holds leaves a gap: take the daemon's page.
+      const gap = newest > 0 && h.more && first > newest + 1
+      const events = gap ? h.events : mergeEvents(held, h.events).slice(-KEEP)
+      this.after = Math.max(this.after, events.at(-1)?.seq ?? 0)
+      this.set({ events, more: gap || !this.snap.loaded ? h.more : this.snap.more, loaded: true, loadError: null, partial: '' })
       this.connect()
       void this.refreshStatus()
     } catch (e) {
-      if (this.stopped) return
+      if (this.stopped || epoch !== this.epoch) return
       const p = problemOf(e)
-      if (p.kind === 'signed-out' || p.kind === 'refused') {
-        this.set({ loadError: p.message, connection: p.kind === 'refused' ? 'refused' : 'signed-out' })
-        return
-      }
-      this.set({ loadError: p.message, connection: 'reconnecting' })
-      this.retry(() => void this.load())
+      if (p.kind === 'signed-out' || p.kind === 'refused') this.end(p)
+      else this.lost(p.message)
     }
   }
 
@@ -149,36 +205,76 @@ export class DeskThread {
     this.source?.close()
     const src = this.deps.open(this.deps.api.streamUrl(this.workspaceId, this.after))
     this.source = src
+    // A stream that neither opens nor fails is lost too.
+    this.deps.clearTimeout(this.probeTimer)
+    this.probeTimer = this.deps.setTimeout(() => {
+      if (this.source === src) this.lost('the event stream did not open in time')
+    }, OPEN_TIMEOUT)
     src.onopen = () => {
       if (this.source !== src) return
       this.backoff = BACKOFF.min
-      this.set({ connection: 'live' })
+      this.set({ connection: 'live', retryAt: null, failures: 0 })
       void this.refreshStatus()
+      this.scheduleProbe()
     }
+    // EventSource hides why it failed: leave it to the next history read, which says 401.
     src.onerror = () => {
       if (this.source !== src) return
-      // EventSource hides the status of a refusal, so ask: a signed-out session says 401.
-      src.close()
-      this.source = null
-      this.set({ connection: 'reconnecting' })
-      void this.deps.api.status(this.workspaceId).then(
-        () => this.retry(() => this.connect()),
-        (e) => {
-          const p = problemOf(e)
-          if (p.kind === 'signed-out') this.set({ connection: 'signed-out', problem: p })
-          else if (p.kind === 'refused') this.set({ connection: 'refused', problem: p })
-          else this.retry(() => this.connect())
-        },
-      )
+      this.lost('the event stream closed')
     }
     for (const kind of STORED) src.addEventListener(kind, (ev) => this.onEvent(kind, ev.data))
     src.addEventListener('partial', (ev) => this.onEvent('partial', ev.data))
+  }
+
+  private scheduleProbe() {
+    this.deps.clearTimeout(this.probeTimer)
+    this.probeTimer = this.deps.setTimeout(() => void this.probe(), PROBE_EVERY)
+  }
+
+  /** While live, asks the daemon's status: the answer, or its absence, is the heartbeat. */
+  private async probe() {
+    const src = this.source
+    if (this.stopped || !src || this.snap.connection !== 'live') return
+    try {
+      const s = await this.deps.api.status(this.workspaceId)
+      if (this.stopped || this.source !== src) return
+      this.set({ busy: s.busy, queued: s.queued })
+      this.scheduleProbe()
+    } catch (e) {
+      if (this.stopped || this.source !== src) return
+      const p = problemOf(e)
+      if (p.kind === 'signed-out' || p.kind === 'refused') this.end(p)
+      else this.lost(p.message)
+    }
+  }
+
+  /** The connection is lost: say so, drop the stream, retry with backoff. */
+  private lost(why: string) {
+    if (this.stopped) return
+    this.epoch++
+    this.source?.close()
+    this.source = null
+    this.deps.clearTimeout(this.probeTimer)
+    this.set({ connection: 'reconnecting', partial: '', loadError: this.snap.loaded ? this.snap.loadError : why, failures: this.snap.failures + 1 })
+    this.retry(() => void this.resync())
+  }
+
+  /** The session cannot continue: say what to do and stop trying until the person acts. */
+  private end(p: Problem) {
+    this.epoch++
+    this.source?.close()
+    this.source = null
+    this.deps.clearTimeout(this.timer)
+    this.timer = null
+    this.deps.clearTimeout(this.probeTimer)
+    this.set({ connection: p.kind === 'refused' ? 'refused' : 'signed-out', problem: p, loadError: p.message, retryAt: null, partial: '' })
   }
 
   private retry(fn: () => void) {
     if (this.stopped) return
     this.deps.clearTimeout(this.timer)
     this.timer = this.deps.setTimeout(fn, this.backoff)
+    this.set({ retryAt: this.deps.now() + this.backoff })
     this.backoff = Math.min(this.backoff * 2, BACKOFF.max)
   }
 
@@ -211,7 +307,7 @@ export class DeskThread {
       const s = await this.deps.api.status(this.workspaceId)
       if (!this.stopped) this.set({ busy: s.busy, queued: s.queued })
     } catch {
-      // the stream's own errors decide the connection; this is a refinement
+      // the probe and the stream decide the connection; this is a refinement
     }
   }
 
@@ -254,13 +350,14 @@ export class DeskThread {
 
   private fail(e: unknown, patch: Partial<DeskSnapshot> = {}) {
     const p = problemOf(e)
-    const connection = p.kind === 'signed-out' ? 'signed-out' : p.kind === 'refused' ? 'refused' : this.snap.connection
-    if (connection === 'signed-out' || connection === 'refused') {
-      this.source?.close()
-      this.source = null
-      this.deps.clearTimeout(this.timer)
+    if (p.kind === 'signed-out' || p.kind === 'refused') {
+      this.end(p)
+      this.set(patch)
+      return
     }
-    this.set({ ...patch, problem: p, connection })
+    this.set({ ...patch, problem: p })
+    // A write that never got an answer says the daemon is gone: do not wait for the probe.
+    if (e instanceof NetworkError && this.snap.connection === 'live') this.lost(p.message)
   }
 }
 
@@ -270,12 +367,13 @@ export function problemOf(e: unknown): Problem {
     if (e.status === 429) {
       return { kind: 'full', message: 'The front desk already has as many messages waiting as it takes. Wait for one to finish, then send this again.' }
     }
-    if (e.status === 401) return { kind: 'signed-out', message: `You are signed out. ${SIGN_IN_HINT}` }
+    if (e.status === 401) return { kind: 'signed-out', message: `You are signed out (a daemon restart ends every browser session). ${SIGN_IN_HINT}` }
     if (e.status === 403) {
       return { kind: 'refused', message: `The daemon refused this: ${e.message}. Reload the page; if it persists, sign in again with \`shepherd web\`.` }
     }
     return { kind: 'other', message: e.message }
   }
+  if (e instanceof NetworkError) return { kind: 'other', message: `Cannot reach the daemon: ${e.message}.` }
   return { kind: 'other', message: e instanceof Error ? e.message : String(e) }
 }
 

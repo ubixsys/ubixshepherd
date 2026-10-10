@@ -122,9 +122,17 @@ export function Markdown({ text }: { text: string }) {
 const CONNECTION: Record<Connection, { text: string; cls: string; glyph: string }> = {
   connecting: { text: 'Connecting…', cls: '', glyph: '○' },
   live: { text: 'Live', cls: 'is-up', glyph: '●' },
-  reconnecting: { text: 'Reconnecting…', cls: 'is-down', glyph: '○' },
+  reconnecting: { text: 'Offline', cls: 'is-down', glyph: '○' },
   'signed-out': { text: 'Signed out', cls: 'is-down', glyph: '○' },
   refused: { text: 'Refused', cls: 'is-down', glyph: '○' },
+}
+
+/** ", retrying in 4s" until `at`; the one part of the page that ticks every second. */
+function Countdown({ at }: { at: number | null }) {
+  const now = useNow(1000)
+  if (at === null) return <>, reconnecting…</>
+  const s = Math.max(0, Math.ceil((at - now) / 1000))
+  return <>{s > 0 ? `, retrying in ${s}s` : ', retrying…'}</>
 }
 
 /** How close to the bottom, in px, still counts as being at it. */
@@ -256,6 +264,7 @@ function ChatThread({
   }, [confirming])
 
   const conn = CONNECTION[d.connection]
+  const offline = d.connection === 'reconnecting'
   const stopped = d.connection === 'signed-out' || d.connection === 'refused'
 
   return (
@@ -264,7 +273,13 @@ function ChatThread({
         <h1>Chat</h1>
         <p className={`chat-conn live-dot ${conn.cls}`} role="status">
           <span aria-hidden="true">{conn.glyph}</span> {conn.text}
+          {offline && <Countdown at={d.retryAt} />}
         </p>
+        {offline && (
+          <button type="button" className="button" onClick={() => thread.wake()}>
+            Retry now
+          </button>
+        )}
         {children}
         <span className="chat-tools">
           {d.busy && (
@@ -311,7 +326,13 @@ function ChatThread({
           {d.loadError ?? `You are signed out. ${SIGN_IN_HINT}`}
         </p>
       )}
-      {d.loadError && !stopped && (
+      {offline && d.loaded && (
+        <p className="chat-problem tone-bad" role="alert">
+          The daemon is not answering, so this conversation may be out of date. It reconnects by itself
+          {d.failures >= 3 ? `; if it keeps failing the daemon may have moved: ${SIGN_IN_HINT}` : '.'}
+        </p>
+      )}
+      {d.loadError && !stopped && !d.loaded && (
         <p className="chat-problem tone-bad" role="alert">
           Could not read the conversation: {d.loadError}. Retrying.
         </p>

@@ -1,5 +1,6 @@
 import type { Feed } from '../api/types'
-import { INTERVALS, Live, type Api, type Clock } from './live'
+import { ApiError } from '../api/client'
+import { BACKOFF, INTERVALS, Live, type Api, type Clock } from './live'
 
 // A clock whose timers run only when the test says, and a tab that can be hidden.
 function fakeClock() {
@@ -124,6 +125,69 @@ describe('Live', () => {
     expect(live.getSnapshot().error).toBe('the daemon is not reachable')
     expect(live.getSnapshot().ready).toBe(true)
     expect(live.getSnapshot().runs).toHaveLength(1)
+  })
+
+  it('backs off from 1s to 15s while the daemon is down, then catches up from its cursor', async () => {
+    const c = fakeClock()
+    const f = fakeApi()
+    const live = new Live(f.api, c.clock)
+    live.start()
+    await settle()
+    const { feed, status } = f.api
+    f.api.feed = f.api.status = async () => {
+      throw new Error('Failed to fetch')
+    }
+    const waits: number[] = []
+    for (let i = 0; i < 6; i++) {
+      c.fire()
+      await settle()
+      waits.push(Math.min(...c.timers.map((t) => t.ms)))
+    }
+    expect(live.getSnapshot().error).toBe('Failed to fetch')
+    expect(waits.slice(0, 5)).toEqual([BACKOFF.min, 2000, 4000, 8000, BACKOFF.max])
+    expect(waits[5]).toBe(BACKOFF.max)
+    // The daemon is back with two items missed: they arrive once, after the cursor.
+    f.api.feed = feed
+    f.api.status = status
+    f.feeds.push({
+      items: [
+        { id: 6, kind: 'commit', text: 'a', ref: 1, created: '2026-10-08T12:00:05Z' },
+        { id: 7, kind: 'commit', text: 'b', ref: 1, created: '2026-10-08T12:00:06Z' },
+      ],
+      events: ['commit', 'commit'],
+      last: 7,
+    })
+    live.wake()
+    await settle()
+    expect(live.getSnapshot().error).toBeNull()
+    expect(live.getSnapshot().feed.map((e) => e.id)).toEqual([6, 7])
+    expect(c.timers.some((t) => t.ms === INTERVALS.feedVisible)).toBe(true)
+  })
+
+  it('counts a request that never answers as lost once the client gives up on it', async () => {
+    const c = fakeClock()
+    const f = fakeApi()
+    const live = new Live(f.api, c.clock)
+    live.start()
+    await settle()
+    f.api.status = async () => {
+      throw new Error('the daemon did not answer in time')
+    }
+    await live.refresh()
+    expect(live.getSnapshot().error).toContain('did not answer')
+  })
+
+  it('says what to do when the session ended', async () => {
+    const c = fakeClock()
+    const f = fakeApi()
+    const live = new Live(f.api, c.clock)
+    live.start()
+    await settle()
+    f.api.status = async () => {
+      throw new ApiError(401, 'missing, wrong or revoked token')
+    }
+    await live.refresh()
+    expect(live.getSnapshot().error).toContain('shepherd web')
   })
 
   it('remembers what was seen across reloads', () => {

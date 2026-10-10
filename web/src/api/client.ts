@@ -17,6 +17,15 @@ export class ApiError extends Error {
 
 export const CSRF_HEADER = 'X-Shepherd-CSRF'
 
+/** What to do about a signed-out session; a daemon restart ends every browser session. */
+export const SIGN_IN_HINT = 'Run `shepherd web` in a terminal to open a new sign-in link.'
+
+/** How long a request may take before it counts as lost: a hung daemon is an offline one. */
+export const REQUEST_TIMEOUT = 6000
+
+/** The daemon did not answer in time, or could not be reached at all. */
+export class NetworkError extends Error {}
+
 let csrf: Promise<string> | null = null
 
 /** The session's CSRF token: "" through the dev proxy, which uses a token instead. */
@@ -34,8 +43,27 @@ function csrfToken(): Promise<string> {
 async function call<T>(path: string, init?: RequestInit): Promise<T> {
   const write = init?.method !== undefined && init.method !== 'GET'
   const token = write ? await csrfToken() : ''
+  // The timer covers the body too: a daemon that sends headers and stalls is as lost.
+  const ctl = new AbortController()
+  let timedOut = false
+  const timer = setTimeout(() => {
+    timedOut = true
+    ctl.abort()
+  }, REQUEST_TIMEOUT)
+  try {
+    return await exchange<T>(path, init, token, ctl.signal)
+  } catch (e) {
+    if (e instanceof ApiError) throw e
+    throw new NetworkError(timedOut ? 'the daemon did not answer in time' : `the daemon could not be reached (${e instanceof Error ? e.message : String(e)})`)
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+async function exchange<T>(path: string, init: RequestInit | undefined, token: string, signal: AbortSignal): Promise<T> {
   const res = await fetch(path, {
     ...init,
+    signal,
     headers: {
       Accept: 'application/json',
       ...(init?.body ? { 'Content-Type': 'application/json' } : {}),

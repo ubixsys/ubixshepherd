@@ -3,7 +3,7 @@
 // a refresh of the lists when something happened; the lists are also refreshed on a
 // slower clock, since the forge's state changes without asking. Both slow down while the
 // tab is hidden. (Server-sent events will replace the feed poll.)
-import { api as realApi } from '../api/client'
+import { api as realApi, ApiError, SIGN_IN_HINT } from '../api/client'
 import type { DecisionView, LaneView, RequestView, RunView, SpendToday, Status } from '../api/types'
 import { noteOutcome, type Seen } from '../model/board'
 import { entries, type FeedEntry } from '../model/feed'
@@ -37,6 +37,9 @@ export const INTERVALS = {
   listsHidden: 30_000,
 }
 
+/** While the daemon does not answer, both polls back off from here, doubling to the cap. */
+export const BACKOFF = { min: 1000, max: 15_000 }
+
 const SEEN_KEY = 'shepherd.seen'
 
 export interface Clock {
@@ -61,6 +64,8 @@ export class Live {
   private last = -1
   private stopped = true
   private listsInFlight: Promise<void> | null = null
+  /** Consecutive failed reads; 0 while the daemon answers. */
+  private failures = 0
   private readonly api: Api
   private readonly clock: Clock
 
@@ -109,14 +114,28 @@ export class Live {
 
   private scheduleFeed() {
     if (this.stopped) return
-    const ms = this.clock.hidden() ? INTERVALS.feedHidden : INTERVALS.feedVisible
+    const ms = this.failures > 0 ? this.retryIn() : this.clock.hidden() ? INTERVALS.feedHidden : INTERVALS.feedVisible
     this.feedTimer = this.clock.setTimeout(() => void this.pollFeed().then(() => this.scheduleFeed()), ms)
   }
 
   private scheduleLists() {
     if (this.stopped) return
-    const ms = this.clock.hidden() ? INTERVALS.listsHidden : INTERVALS.listsVisible
+    const ms = this.failures > 0 ? this.retryIn() : this.clock.hidden() ? INTERVALS.listsHidden : INTERVALS.listsVisible
     this.listsTimer = this.clock.setTimeout(() => void this.refresh().then(() => this.scheduleLists()), ms)
+  }
+
+  private retryIn() {
+    return Math.min(BACKOFF.min * 2 ** (this.failures - 1), BACKOFF.max)
+  }
+
+  private ok() {
+    this.failures = 0
+  }
+
+  /** The feed poll alone counts failures, so the two polls share one backoff. */
+  private bad(e: unknown, counts = false) {
+    if (counts) this.failures++
+    this.set({ error: message(e) })
   }
 
   /** Reads the newest window of the feed, and where to poll from. */
@@ -132,9 +151,10 @@ export class Live {
         after = page.last
       }
       this.last = last
+      this.ok()
       this.set({ feed, error: null })
     } catch (e) {
-      this.set({ error: message(e) })
+      this.bad(e, true)
     }
   }
 
@@ -142,6 +162,7 @@ export class Live {
     if (this.last < 0) return this.loadFeed()
     try {
       const page = await this.api.feed(this.last)
+      this.ok()
       if (page.items.length === 0) {
         if (this.snap.error) this.set({ error: null })
         return
@@ -153,7 +174,7 @@ export class Live {
       this.set({ feed: [...this.snap.feed, ...fresh].slice(-FEED_WINDOW), runs, error: null })
       void this.refresh()
     } catch (e) {
-      this.set({ error: message(e) })
+      this.bad(e, true)
     }
   }
 
@@ -180,7 +201,7 @@ export class Live {
         error: null, ready: true, updated: this.clock.now(),
       })
     } catch (e) {
-      this.set({ error: message(e) })
+      this.bad(e)
     }
   }
 
@@ -208,6 +229,9 @@ export class Live {
 }
 
 function message(e: unknown): string {
+  if (e instanceof ApiError && e.status === 401) {
+    return `signed out (a daemon restart ends every browser session). ${SIGN_IN_HINT}`
+  }
   return e instanceof Error ? e.message : String(e)
 }
 

@@ -79,9 +79,10 @@ describe('ChatPage', () => {
     try {
       act(() => src.emit('assistant', deskEvent({ seq: 8, kind: 'assistant', text: 'one more' })))
       act(() => src.fail())
-      expect(await screen.findByText('Reconnecting…')).toBeInTheDocument()
+      expect(await screen.findByText(/Offline, retrying in \ds/)).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Retry now' })).toBeInTheDocument()
       await act(async () => {
-        await vi.advanceTimersByTimeAsync(600)
+        await vi.advanceTimersByTimeAsync(1100)
       })
       expect(FakeSource.all[1]?.url).toBe('/stream?ws=0&after=8')
       act(() => FakeSource.get(1).open())
