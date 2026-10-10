@@ -32,6 +32,7 @@ var serviceFor = service.For
 
 func runDaemon(ctx context.Context, env Env, args []string) error {
 	fs := flags("daemon", env)
+	force := fs.Bool("force-from-run", false, "allow start, restart or install from inside an agent run")
 	pos, err := parse(fs, args)
 	if err != nil {
 		return err
@@ -43,6 +44,11 @@ func runDaemon(ctx context.Context, env Env, args []string) error {
 		sub = pos[0]
 	default:
 		return errUsage
+	}
+	if sub == "start" || sub == "restart" || sub == "install" {
+		if err := refuseFromRun(env, sub, *force); err != nil {
+			return err
+		}
 	}
 	switch sub {
 	case "run":
@@ -82,6 +88,8 @@ func runDaemon(ctx context.Context, env Env, args []string) error {
 // daemonRun runs the daemon in the foreground until interrupted or asked to stop.
 func daemonRun(ctx context.Context, env Env) error {
 	l := env.Layout
+	// Whatever started this daemon, it must not carry a run's push block or identity.
+	unsetRunEnv()
 	// Fail loudly: on a git older than the minimum the push block silently does not apply.
 	if err := git.CheckVersion(ctx, git.MinVersion); err != nil {
 		return err
@@ -216,7 +224,7 @@ func spawn(env Env) (int, error) {
 	defer logf.Close()
 	cmd := exec.Command(env.Exe, "daemon")
 	cmd.Stdout, cmd.Stderr = logf, logf
-	cmd.Env = append(os.Environ(), paths.HomeEnv+"="+env.Layout.Home)
+	cmd.Env = append(scrubRunEnv(os.Environ()), paths.HomeEnv+"="+env.Layout.Home)
 	cmd.SysProcAttr = detached()
 	if err := cmd.Start(); err != nil {
 		return 0, err
