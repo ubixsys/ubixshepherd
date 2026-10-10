@@ -63,6 +63,12 @@
 #   ## A run that prints nothing for this long is stopped and recorded failed (at
 #   ## least 1m, or off). Any output resets it.
 #   idle_timeout: 10m
+#   ## Token limits told to OpenCode for the local model (defaults 32768 and 8192;
+#   ## output must be less than context). They only set when OpenCode compacts: the
+#   ## model host must load at least this much context itself (Ollama:
+#   ## OLLAMA_CONTEXT_LENGTH or a Modelfile num_ctx).
+#   context: 32768
+#   output: 8192
 
 ## The profile every repo starts from.
 # defaults:

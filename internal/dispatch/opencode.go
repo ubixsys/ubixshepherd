@@ -305,9 +305,10 @@ func openCodeConfig(o Opts, s config.OpenCode) string {
 			}},
 		}
 		if model != "" {
+			ctx, out := s.Limits()
 			prov = append(prov, kv{"models", obj{{model, obj{
 				{"name", model},
-				{"limit", obj{{"context", 32768}, {"output", 8192}}},
+				{"limit", obj{{"context", ctx}, {"output", out}}},
 			}}}})
 		}
 		cfg = append(cfg, kv{"provider", obj{{provider, prov}}})
