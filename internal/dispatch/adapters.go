@@ -280,6 +280,19 @@ var adapters = map[string]Adapter{
 		SessionCost: true,
 		Limit:       limitWords(copilotLimitWords),
 	},
+	"opencode": {
+		Name: "opencode", Bin: "opencode",
+		// The prompt is standard input; the config is in the environment (see opencode.go).
+		Args:        openCodeArgs,
+		WorkerReady: always,
+		// OpenCode names the session itself and every JSON event carries its id.
+		NewSession: func(context.Context, string, string) (string, error) { return "", nil },
+		SessionIn:  openCodeSession,
+		// opencode -s opens its TUI on the session, in the lane's worktree.
+		Attach: func(session, _ string) []string { return []string{"-s", session} },
+		Note:   "You run on a small local model, so keep to small mechanical edits. Make one tool call at a time through the tool interface, never write a tool call out as text. Shepherd's tools are named shepherd_ask_human, shepherd_ask_shepherd and shepherd_report. Commit with `git add` then `git commit`. Do not write tests in a typed codebase: stop and say so instead.",
+		Read:   openCodeOutput,
+	},
 	"cursor": {
 		Name: "cursor", Bin: "cursor-agent",
 		Args: func(o Opts) []string {
@@ -342,6 +355,9 @@ func AdapterFor(name string) (Adapter, error) {
 	a, ok := adapters[name]
 	if !ok {
 		return a, fmt.Errorf("unknown agent %q; Shepherd knows %s", name, strings.Join(AgentNames(), ", "))
+	}
+	if name == "opencode" {
+		return openCodeFor(a)
 	}
 	return a, nil
 }

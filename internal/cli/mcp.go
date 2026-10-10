@@ -153,12 +153,12 @@ func mcpTools() []mcpTool {
 		},
 		{
 			Name: "lane_run",
-			Description: "Start an agent (claude, copilot or cursor) headless in a lane's worktree on a task, and return at once with the run id. The lane keeps its conversation: by default this continues the lane's last session with the same agent. " +
+			Description: "Start an agent (claude, copilot, cursor or opencode) headless in a lane's worktree on a task, and return at once with the run id. The lane keeps its conversation: by default this continues the lane's last session with the same agent. " +
 				"The agent may edit and commit inside the lane's scope and run the repo's gate; it can never push. One agent per lane. Check on it with run_status.",
 			InputSchema: obj(map[string]any{
 				"repo":        propRepo,
 				"lane":        map[string]any{"type": "string", "description": "The lane's name; open it first with lane_open."},
-				"agent":       map[string]any{"type": "string", "enum": []string{"claude", "copilot", "cursor"}},
+				"agent":       map[string]any{"type": "string", "enum": []string{"claude", "copilot", "cursor", "opencode"}},
 				"task":        map[string]any{"type": "string", "description": "What the agent should do, as you would brief a colleague. Shepherd adds the lane, scope and rules."},
 				"model":       map[string]any{"type": "string", "description": "Model, if not the repo's default for this agent (agent.model in its profile) or the agent's own."},
 				"new_session": map[string]any{"type": "boolean", "description": "Start a new conversation. By default the lane keeps its conversation: the run continues the lane's last session with this agent."},
@@ -305,7 +305,7 @@ func mcpTools() []mcpTool {
 			InputSchema: obj(map[string]any{
 				"id":    map[string]any{"type": "integer"},
 				"lane":  map[string]any{"type": "string"},
-				"agent": map[string]any{"type": "string", "enum": []string{"claude", "copilot", "cursor"}},
+				"agent": map[string]any{"type": "string", "enum": []string{"claude", "copilot", "cursor", "opencode"}},
 			}, "id", "lane"),
 			args: func(a map[string]any) ([]string, error) {
 				id, ok := a["id"].(float64)
