@@ -39,6 +39,10 @@ func TestTemplateExamplesAreValid(t *testing.T) {
 	if err != nil {
 		t.Fatalf("an example in the template is invalid: %v\n%s", err, uncomment(Template()))
 	}
+	if p := c.Project("app-group"); len(c.Projects) != 2 || p.Budget.Cap != CapSoft || len(c.Projects["framework-group"].Caches) != 1 ||
+		len(c.Projects["framework-group"].Intake) != 3 || c.Desk.BudgetCapMode() != CapSoft {
+		t.Errorf("project examples did not apply: %+v", c.Projects)
+	}
 	if c.Profile("my-app").BranchModel != Promotion || c.Profile("framework").Autonomy.Tag != Agent {
 		t.Errorf("examples did not apply: %+v", c.Repos)
 	}

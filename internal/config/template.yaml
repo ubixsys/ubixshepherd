@@ -16,6 +16,9 @@
 #   ## Dollars a day past which Shepherd holds the runs it starts on its own (pipeline
 #   ## and gate fixes, routed requests); 0 for no cap. A warning comes at 80%.
 #   budget: 20
+#   ## soft only warns, even at 100%; hard (the default) also holds those runs. Never a
+#   ## run you started yourself.
+#   budget_cap: hard
 #   ## What one Copilot credit costs, since Copilot reports credits, not dollars.
 #   credit_usd: 0.04
 #   ## What the daemon logs: debug, info, warn or error. A reload applies a change; the
@@ -45,6 +48,10 @@
 #   ## What each operator tool returns to the daemon's desk, at most; the start and the
 #   ## end are kept.
 #   tool_output_chars: 4000
+#   ## The desk's own daily line in dollars, against the workspace budget and charged to
+#   ## no project; unset gives it no limit of its own. Its cap is soft or hard as above.
+#   budget: 5
+#   budget_cap: soft
 
 ## OpenCode, for small mechanical edits on a local model (see docs/opencode.md).
 # opencode:
@@ -137,3 +144,50 @@
 #         task: |
 #           Move the framework requirement in composer.json to ^{major}.{minor},
 #           run composer update for it alone, run the gate, and commit.
+
+## Projects: named groups of repos that share a brief, a budget and a way of taking
+## requests from other projects (see docs/projects.md). A repo is in at most one project,
+## and every member and recipe repo must be listed under repos above. A repo in no
+## project behaves as before. The brief is not here: the front desk drafts it and you
+## approve it.
+# projects:
+#   framework-group:
+#     repos: [framework]
+#     ## Past this age an approved brief shows as stale; nothing is blocked. 30d if unset.
+#     brief_max_age: 30d
+#     ## Dollars per period; unset takes daemon.budget. The workspace budget holds first
+#     ## when the projects sum above it. period: day (the default) or month. cap: soft or
+#     ## hard (the default), as for daemon.budget_cap.
+#     budget:
+#       amount: 20
+#       period: day
+#       cap: hard
+#     ## Local build caches that are not repos. made_by is <repo>:<recipe path>, so a cache
+#     ## can always be rebuilt rather than patched; agents are told where and how.
+#     caches:
+#       - path: ~/build/toolchain-cache
+#         made_by: framework:tools/build-toolchain.sh
+#         note: Toolchain objects; rebuild, do not hand-patch.
+#     ## Rules for requests from other projects: first match wins, no match holds. They
+#     ## match on the sender and typed fields only. decide: auto (open a lane and start an
+#     ## agent), hold (a decision for you) or refuse (the asker is told why).
+#     intake:
+#       - from: "*"
+#         kind: bug
+#         evidence: [failing_test]
+#         touches: [internal, tests]
+#         decide: auto
+#       - from: "*"
+#         kind: [feature, bug]
+#         decide: hold
+#       - from: "*"
+#         kind: notice
+#         decide: refuse
+#         why: changes flow out from this project, not in
+#   app-group:
+#     repos: [my-app]
+#     budget: {amount: 10, cap: soft}
+#     intake:
+#       - from: framework-group
+#         kind: notice
+#         decide: auto
