@@ -10,6 +10,10 @@ import { GROUP_MARKS } from '../model/groups'
 import { useNow } from '../hooks'
 import { href } from '../router'
 import { useLive, useSnapshot } from '../state/context'
+import { laneSource } from '../conversation/api'
+import { Conversation } from '../conversation/Conversation'
+import type { ConversationSource } from '../conversation/types'
+import '../styles/conversation.css'
 
 /** A run's state as the feed event that reports it, for its glyph. */
 export const RUN_EVENT: Record<RunView['state'], string> = {
@@ -26,7 +30,12 @@ interface LaneData {
   requests: RequestView[]
 }
 
-export function LanePage({ id }: { id: number }) {
+type Tab = 'overview' | 'conversation'
+
+/** `conversation` replaces the daemon's reader; tests give it a fake. */
+export function LanePage({ id, conversation }: { id: number; conversation?: (laneId: number) => ConversationSource }) {
+  const [tab, setTab] = useState<Tab>('overview')
+  const source = useMemo(() => (conversation ?? laneSource)(id), [conversation, id])
   const snap = useSnapshot()
   const live = useLive()
   const now = useNow()
@@ -124,7 +133,30 @@ export function LanePage({ id }: { id: number }) {
         </p>
       )}
 
-      <div className="lane-grid">
+      <div className="lane-tabs" role="tablist" aria-label="Lane views">
+        {(['overview', 'conversation'] as const).map((t) => (
+          <button
+            key={t}
+            type="button"
+            role="tab"
+            id={`lane-tab-${t}`}
+            className="lane-tab"
+            aria-selected={tab === t}
+            aria-controls="lane-panel"
+            onClick={() => setTab(t)}
+          >
+            {t === 'overview' ? 'Overview' : 'Conversation'}
+          </button>
+        ))}
+      </div>
+
+      {tab === 'conversation' && (
+        <div id="lane-panel" role="tabpanel" aria-labelledby="lane-tab-conversation">
+          <Conversation source={source} refreshKey={feedLast} now={now} />
+        </div>
+      )}
+
+      <div className="lane-grid" id={tab === 'overview' ? 'lane-panel' : undefined} role={tab === 'overview' ? 'tabpanel' : undefined} aria-labelledby={tab === 'overview' ? 'lane-tab-overview' : undefined} hidden={tab !== 'overview'}>
         <section className="lane-main" aria-labelledby="runs-h">
           <h2 id="runs-h" className="section-h">Runs</h2>
           {error && <p className="tone-bad">Could not load the runs: {error}</p>}

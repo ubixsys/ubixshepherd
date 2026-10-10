@@ -1,0 +1,59 @@
+/* The Conversation tab on the lane page: one thread of a lane's whole dialogue. Styles
+   come from this file only (the daemon's CSP allows no inline). */
+
+.lane-tabs { display: flex; gap: 4px; margin: 0 0 16px; padding-left: var(--gutter); border-bottom: 1px solid var(--rule); }
+.lane-tab {
+  font: inherit; color: var(--muted); background: none; border: 0; border-bottom: 2px solid transparent;
+  padding: 6px 12px; cursor: pointer; margin-bottom: -1px;
+}
+.lane-tab:hover { color: var(--ink); }
+.lane-tab[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--lichen); font-weight: 600; }
+
+.cv { padding-bottom: 24px; }
+.cv-bar { display: flex; align-items: center; gap: 12px; padding-left: var(--gutter); margin-bottom: 8px; font-size: var(--t-sm); }
+.cv > p { padding-left: var(--gutter); }
+.cv-thread { list-style: none; margin: 0; padding: 0; }
+.cv-thread > li { margin: 0; }
+
+.cv-divider { margin: 20px 0 8px; padding: 4px 0 4px var(--gutter); border-top: 1px solid var(--rule-strong); font-size: var(--t-sm); color: var(--muted); }
+.cv-divider-line { font-weight: 600; }
+.cv-note { display: block; margin-top: 2px; }
+
+.cv-msg { max-width: 82ch; margin: 8px 0; padding: 6px 12px 6px calc(var(--gutter) + 8px); border-left: 2px solid transparent; overflow-wrap: anywhere; }
+.cv-user-msg { border-left-color: var(--lantern); background: var(--lantern-wash); border-radius: 0 var(--radius) var(--radius) 0; }
+.cv-agent-msg { border-left-color: var(--lichen); }
+.cv-thinking-msg { border-left-color: var(--rule-strong); font-size: var(--t-sm); }
+.cv-who { display: block; font-size: var(--t-xs); font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.cv-plain { margin: 2px 0 0; white-space: pre-wrap; }
+.cv-clip { margin: 4px 0 0; font-size: var(--t-sm); }
+
+.cv-md > :first-child { margin-top: 2px; }
+.cv-md p, .cv-md ul, .cv-md ol, .cv-md pre { margin: 6px 0; }
+.cv-md p { white-space: pre-wrap; }
+.cv-md-h { font-weight: 600; }
+.cv-md ul, .cv-md ol { padding-left: 1.4em; }
+.cv-md pre { padding: 8px 10px; background: var(--sheet); border: 1px solid var(--rule); border-radius: var(--radius); overflow-x: auto; }
+.cv-md code { font-size: 0.92em; }
+.cv-md :not(pre) > code { padding: 0 3px; background: var(--hover); border-radius: var(--radius); }
+.cv-md a { color: var(--lichen); }
+
+.cv-tool { max-width: 82ch; margin: 2px 0; padding-left: calc(var(--gutter) + 8px); font-size: var(--t-sm); }
+.cv-tool-head {
+  display: flex; align-items: baseline; gap: 8px; width: 100%; text-align: left;
+  font: inherit; color: var(--muted); background: none; border: 0; padding: 2px 4px; cursor: pointer; border-radius: var(--radius);
+}
+.cv-tool-head:hover { background: var(--hover); color: var(--ink); }
+.cv-tool-line { font-family: var(--font-mono); font-size: var(--t-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.cv-tool-status { margin-left: auto; font-size: var(--t-xs); }
+.cv-tool.is-error .cv-tool-status { color: var(--broken); }
+.cv-tool.is-running .cv-tool-status { color: var(--lichen); }
+.cv-tool-body { margin: 2px 0 6px 20px; }
+.cv-tool-body pre {
+  margin: 2px 0 6px; padding: 6px 8px; background: var(--sheet); border: 1px solid var(--rule); border-radius: var(--radius);
+  overflow-x: auto; max-height: 28em; font-size: var(--t-xs); white-space: pre-wrap; overflow-wrap: anywhere;
+}
+
+.cv-jump { position: sticky; bottom: 12px; margin-left: var(--gutter); }
+
+/* The grid's own display would beat the hidden attribute. */
+.lane-grid[hidden] { display: none; }
