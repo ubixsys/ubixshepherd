@@ -46,7 +46,8 @@ A config change applies to the next run; no daemon restart is needed.
   underneath it.
 - **Permissions** are explicit, and `--auto` is not used. Files may be edited. Shell
   commands are denied except `go test`, `go build`, `go vet`, `gofmt`, `git diff`,
-  `git status`, `git log`, `git show`, `git add`, `git commit`, `ls`, `cat` and the repo's
+  `git status`, `git log`, `git show`, `git add`, `git commit`, `ls`, `cat`, `git fetch`,
+  `git rebase origin/*`, `git merge-base`, `git rev-parse` and the repo's
   gate. `git push` is denied unless the repo sets `autonomy.push: agent`, and the runner's
   push block applies as for every agent. Questions, web fetch, web search and access
   outside the worktree are denied. A chained command such as `ls && touch x` is judged
