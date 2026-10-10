@@ -21,6 +21,7 @@
   --broken: #b42318;     /* failed */
   --broken-wash: #f8e1de;
   --ok: #2f7349;         /* passed, merged */
+  --brand: #0f62fe;      /* the uBix mark and name: 4.7:1 on the bar */
 
   --font-ui: "Avenir Next", "Segoe UI Variable Text", "Segoe UI", "Noto Sans", "Helvetica Neue", system-ui, sans-serif;
   --font-mono: "Berkeley Mono", "JetBrains Mono", "SF Mono", "Cascadia Mono", ui-monospace, Menlo, Consolas, monospace;
@@ -83,6 +84,7 @@ html { font-size: clamp(var(--root-min), 0.65625rem + 0.3125vw, var(--root-max))
     --broken: #f07d70;
     --broken-wash: #33201e;
     --ok: #7cc492;
+    --brand: #78a9ff;    /* the logo blue is 3.1:1 on the night bar; this is its lighter step */
   }
 }
 
