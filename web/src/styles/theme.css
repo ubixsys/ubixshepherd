@@ -58,7 +58,8 @@
   --shell-max: 112rem;   /* the box; the window is wider than this on a very large display */
   --measure-table: 96rem; /* the board */
   --measure-page: 68rem; /* lane, log, decisions, chat */
-  --measure-read: 76ch;  /* a line of prose: messages, decisions, answered lists */
+  --measure-read: 76ch;  /* a line of prose: decisions, answered lists */
+  --measure-chat: 1400px; /* the chat thread and composer: the full column, capped on a very wide screen */
   --rail: 20rem;         /* the lane's facts column; the live rail's width later */
   --page-margin-left: 0; /* 0 keeps pages on the shell's left edge; auto centres them */
   --shell-edge: max(0px, calc((100% - var(--shell-max)) / 2));

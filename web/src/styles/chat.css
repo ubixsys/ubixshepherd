@@ -1,6 +1,7 @@
 /* The chat page: the front desk's thread on the same glyph rail as the board, a composer
    pinned under it. Styles come from this file only (the daemon's CSP allows no inline). */
 
+.page.chat { max-width: var(--measure-chat); }
 .chat { display: flex; flex-direction: column; min-height: calc(100vh - var(--bar-h) - 60px); }
 .chat-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin-bottom: 8px; }
 .chat-conn { margin: 0; font-size: var(--t-sm); }
@@ -15,7 +16,7 @@
 .thread { flex: 1; padding-bottom: 16px; }
 .thread-empty { padding-left: var(--gutter); }
 
-.msg { max-width: var(--measure-read); margin: 10px 0; padding: 8px 12px 8px calc(var(--gutter) + 8px); border-left: 2px solid transparent; overflow-wrap: anywhere; }
+.msg { margin: 10px 0; padding: 8px 12px 8px calc(var(--gutter) + 8px); border-left: 2px solid transparent; overflow-wrap: anywhere; }
 .msg-user { border-left-color: var(--lichen); background: color-mix(in srgb, var(--lichen) 10%, var(--field)); border-radius: 0 var(--radius) var(--radius) 0; }
 .msg-assistant { border-left-color: var(--lichen); }
 .msg-assistant.is-partial { opacity: 0.85; }
@@ -33,7 +34,7 @@
 .md a { color: var(--lichen); }
 
 /* Typed event rows: compact, one line, between messages. */
-.trow { display: flex; align-items: baseline; gap: 0; margin: 2px 0; max-width: var(--measure-read); font-size: var(--t-sm); color: var(--muted); overflow-wrap: anywhere; }
+.trow { display: flex; align-items: baseline; gap: 0; margin: 2px 0; font-size: var(--t-sm); color: var(--muted); overflow-wrap: anywhere; }
 .trow > .glyph { text-align: center; }
 .trow-body { flex: 1; min-width: 0; }
 .trow-line { margin: 0; }
@@ -47,7 +48,7 @@
 .decision-inline .decision-q { font-size: var(--t-md); }
 
 .composer {
-  position: sticky; bottom: 0; z-index: 2; max-width: var(--measure-read);
+  position: sticky; bottom: 0; z-index: 2;
   padding: 10px 0 12px; background: var(--field); border-top: 1px solid var(--rule);
 }
 .composer textarea {
