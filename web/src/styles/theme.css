@@ -11,7 +11,7 @@
   --faint: #5b6872;      /* tertiary: ages, labels, timestamps; 4.5:1 on every surface */
   --rule: #d6dde2;       /* hairlines */
   --control-border: #7a868f; /* edges of inputs, options and buttons; 3:1 on every surface */
-  --rule-strong: var(--control-border); /* chat.css still reads this one for its controls */
+  --rule-strong: var(--control-border); /* conversation.css still reads this one for its rules */
   --hover: #e3e8ec;
 
   --lichen: #3e6e5c;     /* accent: working, links, focus */
