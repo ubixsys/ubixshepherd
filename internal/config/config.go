@@ -31,6 +31,9 @@ type Config struct {
 	OpenCode OpenCode           `yaml:"opencode" json:"opencode,omitempty"`
 	Defaults Profile            `yaml:"defaults" json:"defaults"`
 	Repos    map[string]Profile `yaml:"repos" json:"repos,omitempty"`
+	// Projects are named groups of repos with a brief, a budget and intake rules. A repo
+	// in no project behaves as it did before projects.
+	Projects map[string]Project `yaml:"projects,omitempty" json:"projects,omitempty"`
 }
 
 // Daemon holds the daemon's own settings.
@@ -45,6 +48,9 @@ type Daemon struct {
 	// Budget is the daily spend, in dollars, past which Shepherd holds the runs it would
 	// start on its own (fixes, routed requests); 0 means no cap. It warns at 80%.
 	Budget *float64 `yaml:"budget" json:"budget"`
+	// BudgetCap is soft (warns, never holds) or hard (also holds the runs Shepherd starts
+	// itself); "" is hard, which is what Budget always did.
+	BudgetCap string `yaml:"budget_cap,omitempty" json:"budget_cap,omitempty"`
 	// CreditUSD prices one Copilot credit, which Copilot reports instead of dollars.
 	CreditUSD *float64 `yaml:"credit_usd" json:"credit_usd"`
 	// LogLevel is what the daemon logs: debug, info, warn or error (one of LogLevels).
@@ -114,6 +120,11 @@ type Desk struct {
 	// ToolOutputChars caps what each operator tool returns to the daemon's desk; 0 is
 	// DefaultToolOutputChars.
 	ToolOutputChars int `yaml:"tool_output_chars,omitempty" json:"tool_output_chars,omitempty"`
+	// Budget is the desk's own daily line in dollars, against the workspace ceiling and
+	// charged to no project; nil gives it no limit of its own, and 0 likewise.
+	Budget *float64 `yaml:"budget,omitempty" json:"budget,omitempty"`
+	// BudgetCap is soft or hard for that line; "" is hard.
+	BudgetCap string `yaml:"budget_cap,omitempty" json:"budget_cap,omitempty"`
 }
 
 // The desk's defaults and bounds.
@@ -403,6 +414,7 @@ func Parse(b []byte) (Config, error) {
 	if file.Daemon.Budget != nil {
 		c.Daemon.Budget = file.Daemon.Budget
 	}
+	c.Daemon.BudgetCap = file.Daemon.BudgetCap
 	if file.Daemon.CreditUSD != nil {
 		c.Daemon.CreditUSD = file.Daemon.CreditUSD
 	}
@@ -413,6 +425,7 @@ func Parse(b []byte) (Config, error) {
 	c.OpenCode = file.OpenCode
 	c.Defaults = merge(c.Defaults, file.Defaults)
 	c.Repos = file.Repos
+	c.Projects = file.Projects
 	return c, c.Validate()
 }
 
@@ -444,6 +457,9 @@ func (c Config) Validate() error {
 		errs = append(errs, fmt.Errorf("desk.model: %q is not a model name", c.Desk.Model))
 	}
 	errs = append(errs, c.Desk.validate()...)
+	if !slices.Contains(Caps, c.Daemon.BudgetCapMode()) {
+		errs = append(errs, fmt.Errorf("daemon.budget_cap: %q is not %s", c.Daemon.BudgetCap, strings.Join(Caps, " or ")))
+	}
 	if b := c.OpenCode.Bin; b != strings.TrimSpace(b) {
 		errs = append(errs, fmt.Errorf("opencode.bin: %q has blanks around it", b))
 	}
@@ -464,6 +480,7 @@ func (c Config) Validate() error {
 	for name := range c.Repos {
 		errs = append(errs, c.Profile(name).validate("repos."+name)...)
 	}
+	errs = append(errs, c.validateProjects()...)
 	return errors.Join(errs...)
 }
 
@@ -483,6 +500,12 @@ func (d Desk) validate() []error {
 	}
 	if n := d.SummaryTurnCount(); n < 0 || n > MaxSummaryTurns {
 		errs = append(errs, fmt.Errorf("desk.summary_turns: %d; 0 to %d", n, MaxSummaryTurns))
+	}
+	if d.Budget != nil && *d.Budget < 0 {
+		errs = append(errs, fmt.Errorf("desk.budget: %v cannot be negative", *d.Budget))
+	}
+	if !slices.Contains(Caps, d.BudgetCapMode()) {
+		errs = append(errs, fmt.Errorf("desk.budget_cap: %q is not %s", d.BudgetCap, strings.Join(Caps, " or ")))
 	}
 	if n := d.ToolOutputChars; n != 0 && n < MinToolOutputChars {
 		errs = append(errs, fmt.Errorf("desk.tool_output_chars: %d; at least %d", n, MinToolOutputChars))
