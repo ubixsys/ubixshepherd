@@ -1,11 +1,24 @@
 # Projects: groups of repos with a shared brief, budget and front door
 
 **Status:** Proposed. Nothing here is built. The maintainer approved the design on
-2026-10-10 as the basis for the [implementation plan](#implementation-plan); the
+2026-10-10 as the basis for the [implementation plan](#implementation-plan), and decided
+four calls the same day: one project per repo, how budgets nest and cap, that a project
+lists its repos, and a `caches` field (see [Decided](#decided-on-2026-10-10)). The other
 [open questions](#open-questions) stay open until the maintainer decides them, and the plan
 says which must be settled before which phase. It adds one concept above the repo and
 below the workspace, and reuses what exists: repo profiles, `follows`, routed requests and
 decisions.
+
+## Decided on 2026-10-10
+
+| Call | Decision |
+|---|---|
+| One project per repo | A repo is in at most one project. Sharing goes through cross-project requests and `follows`, never dual membership. |
+| Budgets | The workspace budget caps the sum of the project budgets. The front desk's spend is its own line against the workspace ceiling. Every cap is `soft` or `hard`; unmarked is `hard`. |
+| Membership | A project lists its repos (`repos: [...]`). A repo in no project behaves as today; a repo in two projects is a config error. |
+| Caches | A project may list local build caches that are not repos, each made by a recipe in a real repo. Shepherd tells agents where they are and how to rebuild them. |
+
+The sections below state each in place.
 
 ## Why
 
@@ -25,12 +38,19 @@ a focus this month, a bill, and a way of taking requests. Three gaps follow:
 A **project** is a named group of repos in one workspace. It is configuration plus a little
 state in Shepherd's store; it is not a directory, a pack or a product.
 
-- **Members are git repos only.** Each is already a workspace repo with a profile. Build
-  caches, scratch folders and unrelated working copies stay outside Shepherd. When a repo
-  carries its own recipe for them (a `setup` command, a lockfile), a fresh worktree
-  reproduces them from it, as today.
+- **Members are git repos only, and each is in one project** (decided 2026-10-10). Each
+  is already a workspace repo with a profile, and the project lists it. A repo in no
+  project behaves as today; a repo listed in two projects is a config error. Sharing
+  goes through cross-project requests and `follows`, never through dual membership. A
+  possible later extension: a project may list the projects it consumes, for visibility
+  only; it would change no routing and no budget.
+- **Build caches are not members.** Scratch folders and unrelated working copies stay
+  outside Shepherd. When a repo carries its own recipe for them (a `setup` command, a
+  lockfile), a fresh worktree reproduces them from it, as today. A cache shared by the
+  project's repos can be declared under `caches` (see [Caches](#caches)); that is
+  information for agents, not membership.
 - **A project holds three things:** a brief, a budget, and intake rules for requests from
-  other projects.
+  other projects, plus optional cache declarations.
 - **A project adds no new way to act.** Lanes, leases, runs, decisions and autonomy stay
   per repo. A project only layers context on top, rolls costs up, and decides which
   requests may start work.
@@ -40,8 +60,8 @@ state in Shepherd's store; it is not a directory, a pack or a product.
 ## Config sketch
 
 Projects sit beside `repos:` in the existing config file. Repo profiles are unchanged
-except that a repo may name its project (or the project lists it; one of the two, see
-[open questions](#open-questions)).
+except that the project lists its repos (decided 2026-10-10), so a repo's own profile
+never claims a project.
 
 ```yaml
 projects:
@@ -51,7 +71,11 @@ projects:
     budget:
       amount: 20.00               # dollars per period; default: daemon.budget
       period: day                 # day (default) or month
-      hold: automatic             # warn | automatic (default) | all
+      cap: hard                   # soft | hard (default hard)
+    caches:                       # optional: local build caches that are not repos
+      - path: ~/build/llvm-cache
+        made_by: ubixcore:tools/build-llvm.sh   # <repo>:<recipe path>, a real repo's recipe
+        note: "Toolchain objects; rebuild, do not hand-patch."
     intake:                       # rules for requests from other projects, first match wins
       - from: "*"
         kind: bug
@@ -69,7 +93,7 @@ projects:
 
   acme-shop:
     repos: [shop-api, shop-web]
-    budget: {amount: 10.00, hold: automatic}
+    budget: {amount: 10, cap: soft}
     intake:
       - from: ubixcore
         kind: notice              # "this changed, here is what breaks"
@@ -118,30 +142,62 @@ so a project's spend is a sum with no new measurement. The existing machinery
 (`internal/dispatch/budget.go`) is the model: a daily dollar figure, a warning at 80%, a
 hold on runs Shepherd would start on its own, and never a stop on a run the person started.
 
-**Proposed default:** each project gets the daemon's budget (`daemon.budget`, $20 a day
-today) as its own, with the same warning at 80%. The machine-wide figure stays the ceiling.
-So with no config at all, a project behaves like the workspace does now, and nothing new
-needs choosing.
+**Default:** each project gets the daemon's budget (`daemon.budget`, $20 a day today) as
+its own, with the same warning at 80%. With no config at all, a project behaves like the
+workspace does now, and nothing new needs choosing. Amounts are left to configuration.
 
-| `hold` | Warn at 80% | Hold Shepherd's own runs (fixes, routed requests, follow lanes) at 100% | Hold runs the person starts at 100% |
-|---|---|---|---|
-| `warn` | yes | no | no |
-| `automatic` (default) | yes | yes | no |
-| `all` | yes | yes | yes, until the person raises the budget or overrides |
+**How budgets nest** (decided 2026-10-10):
 
-**Recommendation: `automatic` as the default, `all` opt-in.** The suggestion was "soft by
-default, optional hard cap". Pure soft has one real weakness: the spend that runs away is
-the unattended kind, a failed pipeline fixed again and again, or a request chain, and a
-warning nobody is watching does nothing about it. Holding only what Shepherd starts on
-its own is soft toward the person (they are never blocked from work they typed) and hard
-toward the loop. It is also the behaviour of `daemon.budget` today, so it adds no second
-meaning of "budget". `warn` exists for people who want numbers without a hold, and `all`
-for a project on a metered account.
+- The workspace budget caps the sum of the project budgets. Adding a project does not
+  raise it; a configuration whose project budgets sum above the workspace figure is
+  allowed, and the workspace ceiling holds first.
+- **The front desk's spend is its own line** against the workspace ceiling. It is not
+  charged to any project, so a talkative desk cannot starve a project and a project
+  cannot hide the desk's cost.
+- A run in a repo outside any project counts toward the workspace total only.
+
+**Every cap is marked `soft` or `hard`** (decided 2026-10-10):
+
+| `cap` | At 80% | At 100% |
+|---|---|---|
+| `soft` | Warns. | Warns again. Never stops work: it only reports. |
+| `hard` (default when unmarked) | Warns. | Holds only runs Shepherd starts itself (fixes, routed requests, follow lanes). Never holds a run the person starts. |
+
+This replaces the earlier `hold: warn | automatic | all` design. `hard` is the behaviour
+of `daemon.budget` today, so it adds no second meaning of "budget": it is soft toward the
+person, who is never blocked from work they typed, and hard toward the unattended loop (a
+failed pipeline fixed again and again, a request chain), which is the spend that runs
+away. `soft` is for people who want numbers without a hold. The same marking applies to
+the workspace ceiling and to the desk's line.
 
 A held run says which budget held it and what lifts it, like a quota hold does. Rollups
-(per project, per repo, per day or month) go into the dock's spend line and
-`shepherd project show`. Runs in a repo outside any project count toward the workspace
-total only.
+(per project, per repo, the desk, per day or month) go into the dock's spend line and
+`shepherd project show`.
+
+## Caches
+
+A project may declare **local build caches that are not repos**: a toolchain build, a
+vendored object store, anything slow to make and shared by the project's repos. A cache is
+information, not a member.
+
+```yaml
+caches:
+  - path: ~/build/llvm-cache
+    made_by: ubixcore:tools/build-llvm.sh
+    note: "Toolchain objects; rebuild, do not hand-patch."
+```
+
+| Field | Meaning |
+|---|---|
+| `path` | Where the cache lives on this machine. |
+| `made_by` | `<repo>:<recipe path>`: the recipe in a real repo that makes it, so the cache is always reproducible. The repo must exist in the workspace. |
+| `note` | A line for agents. |
+
+What Shepherd does: tells every agent in the project where each cache is and how to
+rebuild it (the recipe path and its repo), and may show its size and age in `shepherd
+project show`. What it never does: open lanes for a cache, commit to it, or count it as a
+member. Agents should rebuild a cache from its recipe rather than hand-patch it. A
+temporary cache is removed from config when it is no longer needed.
 
 ## Feeds between repos
 
@@ -262,9 +318,9 @@ and this document supplies the first and last pieces of that chain.
 | Requests (`internal/dispatch/route.go`) | `question`, `handoff`, `review`, `person`, addressed to a lane; depth capped. | Adds a project as a target, three kinds and typed fields; the same state machine, depth cap and reply path. |
 | Decisions | `ask_human`, routed `person` requests, quota holds. | A held request is a decision; so is a brief approval and a widened scope. |
 | Autonomy | Per repo: `push`, `merge`, `tag`, `deploy`. | Unchanged. A project grants no autonomy; intake `auto` only starts work. |
-| Budget | `daemon.budget`, daily, holds Shepherd's own runs. | Per-project budgets under it, same semantics, `hold` chooses how hard. |
+| Budget | `daemon.budget`, daily, holds Shepherd's own runs. | Per-project budgets under it, a separate desk line, each cap `soft` or `hard` (default `hard`, today's semantics). |
 | Leases and scope | Per repo; workspace-wide still outstanding. | Unchanged. Cross-project writes are never direct, so none are needed. |
-| Config | `daemon`, `desk`, `defaults`, `repos`. | Adds `projects`, validated like the rest, reloaded on SIGHUP. |
+| Config | `daemon`, `desk`, `defaults`, `repos`. | Adds `projects` (with `repos`, `budget`, `caches`, `intake`), validated like the rest, reloaded on SIGHUP. |
 
 Changes by package, for whoever builds it: `internal/config` (the `projects` section and
 its validation), `internal/store` (brief versions and approvals, a request's project and
@@ -275,22 +331,19 @@ nothing in it names a product.
 
 ## Open questions
 
-1. **Can a repo be in two projects?** Proposed: no, one project per repo. A shared repo
-   (a docs site, a deployment repo) is then its own project, or sits in none. Two
-   projects would make the brief ambiguous and spend double-counted, and the rule is easy
-   to relax later and hard to tighten. The cost: a repo that really serves two groups
-   has no good home.
-2. **Is the workspace budget the sum?** Proposed: no. The workspace figure stays its own
-   ceiling and projects draw under it; a sum of project budgets above it is allowed and
-   the lower one holds first. Computing the workspace budget as the sum would silently
-   raise it whenever someone adds a project.
+1. **Decided 2026-10-10: one project per repo.** A shared repo (a docs site, a deployment
+   repo) is its own project, or sits in none. Sharing goes through cross-project requests
+   and `follows`. A possible later extension: a project lists the projects it consumes,
+   for visibility.
+2. **Decided 2026-10-10: the workspace budget caps the sum of the project budgets,** and
+   the front desk's spend is its own line against the workspace ceiling. Every cap is
+   `soft` or `hard`; see [Spend](#spend).
 3. **One brief per project, but one desk conversation per workspace.** Which brief does
    the desk see? Proposed: all of them in a short index, with the full text of the project
    in whichever lane or repo the turn concerns. Needs a size budget so a dozen projects
    do not crowd the desk's context.
-4. **Does a repo name its project, or the project list its repos?** Proposed: the project
-   lists them, as in the sketch, so membership is read in one place. A repo's own profile
-   cannot then claim a project that does not want it.
+4. **Decided 2026-10-10: the project lists its repos,** so membership is read in one
+   place and a repo's profile cannot claim a project that does not want it.
 5. **Should a follow be able to wait for the person?** The upgrade-when-I-choose case
    wants a follow lane that opens but does not start an agent until told. Proposed:
    a `start: hold` on `Follow`, defaulting to today's behaviour. Alternative: raise
@@ -318,21 +371,18 @@ nothing configured behaves as the workspace does today). Paths are the lane's sc
 
 ### Assumptions to confirm first
 
-The phases use the proposed answers to these [open questions](#open-questions). Questions
-1, 2 and 4 must be decided before phase 1; 3 before phase 6; 5 and 6 can wait for their
-phases; 7 and 8 before phase 5.
-
-| Open question | Assumed in the plan |
-|---|---|
-| 1. A repo in two projects | No: one project per repo, validated. |
-| 2. Workspace budget | Its own ceiling; projects draw under it. |
-| 4. Who lists membership | The project lists its repos. |
+Questions 1, 2 and 4 were decided on 2026-10-10 and the plan builds on those answers (one
+project per repo and validated, the workspace budget caps the sum of the projects with the
+desk on its own line, the project lists its repos), along with the `soft` or `hard` cap
+and `caches`. The phases still use the proposed answers to the rest of the
+[open questions](#open-questions): 3 must be decided before phase 6; 5 and 6 can wait for
+their phases; 7 and 8 before phase 5.
 
 ### Phases
 
 | # | Lane (suggested) | Scope | Depends on | Waits for open lanes |
 |---|---|---|---|---|
-| 1 | `feat/project-config` | `internal/config/**` | decisions 1, 2, 4 | **`feat/desk-rotation`** (holds `internal/config/**`) |
+| 1 | `feat/project-config` | `internal/config/**` | none (decisions 1, 2, 4 made) | **`feat/desk-rotation`** (holds `internal/config/**`) |
 | 2 | `feat/project-store` | `internal/store/**` | none | none |
 | 3 | `feat/project-spend` | `internal/dispatch/budget*.go`, `internal/store/**` | 1, 2 | `feat/desk-rotation`, through 1 |
 | 4 | `feat/project-brief` | `internal/dispatch/runner.go`, `internal/dispatch/adapters.go`, `internal/api/**`, `internal/client/**`, `internal/store/**` | 1, 2 | `feat/desk-rotation`, through 1 |
@@ -355,14 +405,18 @@ not earlier, so phases 3 to 5 do not queue behind the desk lane's files.
 ### Phase 1: config
 
 - **Adds:** a `projects` map in `Config` (`repos`, `brief_max_age`, `budget` with `amount`,
-  `period`, `hold`, `intake` rules as in the sketch); defaults (budget from
-  `daemon.budget`, `period: day`, `hold: automatic`, `brief_max_age: 30d`); validation:
-  members exist in `repos`, a repo is in at most one project, `hold` and `decide` values
-  are in their sets, an intake rule names a known project or `*`, durations parse, amounts
-  are not negative. Merge and reload on SIGHUP as the rest of config does. Extends
-  `template.yaml`.
+  `period` and `cap`, `caches` with `path`, `made_by` and `note`, `intake` rules as in the
+  sketch); a `cap` on the workspace budget and the desk line too; defaults (budget from
+  `daemon.budget`, `period: day`, `cap: hard`, `brief_max_age: 30d`, no caches);
+  validation: members exist in `repos`, a repo is in at most one project, `cap` is `soft`
+  or `hard`, `decide` values are in their set, an intake rule names a known project or
+  `*`, durations parse, amounts are not negative, a cache's `made_by` is `<repo>:<path>`
+  with a repo in the workspace and a non-empty path. Merge and reload on SIGHUP as the
+  rest of config does. Extends `template.yaml`.
 - **Tests:** table tests in the style of `config_test.go` for each rejection above and each
-  default; reload picks up a changed project; `template_test.go` still parses the template.
+  default (including a repo in two projects, an unmarked cap becoming `hard`, a bad
+  `cap`, a malformed or unknown-repo `made_by`); reload picks up a changed project;
+  `template_test.go` still parses the template.
 - **Gate:** `make check`.
 
 ### Phase 2: store and migration
@@ -381,18 +435,21 @@ not earlier, so phases 3 to 5 do not queue behind the desk lane's files.
 ### Phase 3: spend rollup and hold
 
 - **Adds:** a per-project spend total per period (day or month) summed from run costs by
-  repo membership; `hold: warn | automatic | all` in the existing budget check, with the
-  warning at 80% and the held-run message naming the budget and what lifts it; the
-  workspace figure stays the ceiling and holds first when lower. `Spent` and `overBudget`
-  keep their signatures for repos outside any project.
-- **Tests:** extends `budget_test.go`: a project over its cap holds Shepherd-started runs
-  and not a person's (`automatic`), holds both (`all`), holds neither (`warn`); a repo
-  outside any project counts toward the workspace only; the workspace ceiling holds a
-  project still under its own; month rollover. Uses fake runs and the fake agent script as
-  the runner's tests do.
+  repo membership; the front desk's spend as its own line against the workspace ceiling,
+  charged to no project; the `soft` or `hard` behaviour in the existing budget check: both
+  warn at 80%, `soft` only reports at 100%, `hard` holds only runs Shepherd starts itself
+  at 100% and never a person's; the held-run message naming the budget and what lifts it;
+  the workspace ceiling caps the sum of the projects and holds first when lower. `Spent`
+  and `overBudget` keep their signatures for repos outside any project.
+- **Tests:** extends `budget_test.go`: a `hard` project at 100% holds Shepherd-started runs
+  and not a person's; a `soft` project at 100% holds nothing and warns; both warn at 80%;
+  an unmarked cap behaves as `hard`; the desk's spend counts toward the workspace line and
+  no project; a repo outside any project counts toward the workspace only; the workspace
+  ceiling holds a project still under its own; month rollover. Uses fake runs and the fake
+  agent script as the runner's tests do.
 - **Gate:** `make check`.
 
-### Phase 4: brief layering and age
+### Phase 4: brief layering, age and caches
 
 - **Adds:** the approved project brief given to every agent Shepherd starts in a member
   repo, layered between workspace rules and the repo `brief` where
@@ -400,9 +457,13 @@ not earlier, so phases 3 to 5 do not queue behind the desk lane's files.
   its approval age stated in it; draft, approve and read operations on the HTTP API and
   client (approve takes the person's words only, as `decision_answer` does); an `age` and a
   stale flag computed from `approved_at` and `brief_max_age`. Unapproved drafts are never
-  given to an agent. The text goes through `internal/redact` like other stored agent text.
+  given to an agent. The project's `caches` are stated in the same standing text (path,
+  recipe and repo, note), so an agent knows to rebuild rather than patch; Shepherd opens no
+  lane, commit or count for a cache. The text goes through `internal/redact` like other
+  stored agent text.
 - **Tests:** a run in a member repo gets the approved brief and not a draft; order is
-  workspace, project, repo; a repo in no project is unchanged; age and stale flag at the
+  workspace, project, repo; a project's caches appear with their recipe and a project
+  with none adds nothing; a repo in no project is unchanged; age and stale flag at the
   boundary; an agent run cannot approve (the API refuses a worker's token); API round
   trip in `api_test.go` and `client_test.go`.
 - **Gate:** `make check`.
@@ -427,8 +488,8 @@ not earlier, so phases 3 to 5 do not queue behind the desk lane's files.
 
 ### Phase 6: CLI, MCP, desk, dock and web
 
-- **Adds:** `shepherd project` commands first (`list`, `show` with brief, age, spend and
-  intake, `brief draft|approve`), then the MCP tools that map onto them, and the request
+- **Adds:** `shepherd project` commands first (`list`, `show` with brief, age, spend, caches
+  (size and age where the path exists) and intake, `brief draft|approve`), then the MCP tools that map onto them, and the request
   tools' new fields; the desk's standing instruction and operator tools (`internal/desk`
   and `DeskBrief`), including the index of project briefs and the draft-a-refresh
   behaviour; the dock's project name, brief age and spend line; a project page and brief
@@ -448,7 +509,7 @@ maintainer:
 | File | Entry |
 |---|---|
 | `docs/naming.md` | A **Project** row in the family vocabulary: a named group of repos in one workspace, holding a brief, a budget and intake rules; not a directory, a pack or a product. Add "intake" if the term sticks. |
-| `docs/open-questions.md` | One numbered entry for the project concept (the approval and its date), plus one each for questions 1 to 8 above as they are decided, keeping stable numbers and linking back here. |
+| `docs/open-questions.md` | One numbered entry for the project concept (the approval and its date), plus one each for questions 1 to 8 above (1, 2 and 4 are decided, with their date, and the `caches` and `soft`/`hard` cap calls go with them) as they are recorded, keeping stable numbers and linking back here. |
 | `docs/design.md` | A short §3.14 note pointing at this document; it stays **Proposed**. |
 | `docs/v1.md` and `docs/roadmap.md` | Where the project concept lands among the milestones, and the status of each phase as it merges; the end-to-end cross-repo criterion's status changes only when phase 5 and a real run prove it. |
 | `CLAUDE.md` | "Where things stand" and the Code section, once phases merge, not before. |
