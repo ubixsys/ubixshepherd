@@ -10,6 +10,7 @@ import { DecisionsPage } from './pages/Decisions'
 import { LanePage } from './pages/Lane'
 import { LogPage } from './pages/Log'
 import { RunsPage } from './pages/Runs'
+import { UsagePage } from './pages/Usage'
 import { Help } from './components/Help'
 import { GROUP_MARKS } from './model/groups'
 
@@ -70,6 +71,9 @@ export function App() {
           <a href={href.runs()} aria-current={route.page === 'runs' ? 'page' : undefined}>
             Runs
           </a>
+          <a href={href.usage()} aria-current={route.page === 'usage' ? 'page' : undefined}>
+            Usage
+          </a>
           <a href={href.chat()} aria-current={route.page === 'chat' ? 'page' : undefined}>
             Chat
           </a>
@@ -107,6 +111,7 @@ export function App() {
       <main className="main">
         {route.page === 'board' && <BoardPage items={items} range={route.range} />}
         {route.page === 'runs' && <RunsPage range={route.range} agent={route.agent} lane={route.lane} />}
+        {route.page === 'usage' && <UsagePage range={route.range} from={route.from} to={route.to} />}
         {route.page === 'decisions' && <DecisionsPage focus={route.focus} />}
         {route.page === 'chat' && <ChatPage />}
         {route.page === 'lane' && <LanePage key={route.id} id={route.id} />}

@@ -15,6 +15,12 @@ describe('router', () => {
     expect(parse(href.runs())).toEqual({ page: 'runs' })
     const f = { range: 'week', agent: 'claude', lane: 7 } as const
     expect(parse(href.runs(f))).toEqual({ page: 'runs', ...f })
+    expect(parse(href.usage())).toEqual({ page: 'usage' })
+    expect(parse(href.usage({ range: 'month' }))).toEqual({ page: 'usage', range: 'month' })
+    const u = { range: 'custom', from: '2026-10-01', to: '2026-10-07' } as const
+    expect(parse(href.usage(u))).toEqual({ page: 'usage', ...u })
+    expect(parse('#/usage?range=custom&from=nope&to=2026-10-07')).toEqual({ page: 'usage', range: 'custom', to: '2026-10-07' })
+    expect(parse('#/usage?range=week&from=2026-10-01')).toEqual({ page: 'usage', range: 'week' })
     expect(parse('#/nope')).toEqual({ page: 'missing', path: '/nope' })
   })
 })

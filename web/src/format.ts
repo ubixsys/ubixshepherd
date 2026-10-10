@@ -98,3 +98,14 @@ export function shortSha(sha: string | undefined): string {
   if (!sha) return ''
   return sha.substring(0, 8)
 }
+/** A token count at a glance: "0", "850", "12.3k", "412k", "1.8M". Whole numbers from 100k and 10M. */
+export function tokens(n: number): string {
+  if (!(n > 0)) return '0'
+  if (n < 1000) return String(Math.round(n))
+  if (n < 1_000_000) {
+    const k = n / 1000
+    return `${k >= 100 ? Math.round(k) : Math.round(k * 10) / 10}k`
+  }
+  const m = n / 1_000_000
+  return `${m >= 10 ? Math.round(m) : Math.round(m * 10) / 10}M`
+}

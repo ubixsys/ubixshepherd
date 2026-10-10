@@ -1,0 +1,50 @@
+/* The usage page: summary tiles, sortable group tables and the peak-context chart. */
+
+.usage-page .filters input[type="date"] {
+  font: inherit; color: inherit; padding: 0.1875rem var(--s-2);
+  background: var(--sheet); border: 1px solid var(--control-border); border-radius: var(--radius);
+}
+
+.tiles {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr)); gap: var(--s-3);
+  margin: 0 0 var(--s-5) var(--gutter); padding: 0;
+}
+.tile { margin: 0; padding: var(--s-3) var(--s-4); background: var(--sheet); border: 1px solid var(--rule); border-radius: var(--radius); }
+.tile dt { color: var(--faint); font-size: var(--t-xs); }
+.tile dd { margin: var(--s-1) 0 0; }
+.tile strong { display: block; font-size: var(--t-xl); font-weight: 600; letter-spacing: -0.01em; font-variant-numeric: tabular-nums; }
+.tile-sub { display: block; margin-top: var(--s-1); color: var(--muted); font-size: var(--t-xs); }
+
+.usage-group { margin: 0 0 var(--s-5) var(--gutter); }
+.usage-group h2 { margin: 0 0 var(--s-2); font-size: var(--t-lg); font-weight: 600; }
+.usage-table { font-variant-numeric: tabular-nums; }
+.usage-table th:first-child, .usage-table td:first-child { width: auto; padding-right: var(--s-4); }
+.usage-table th.num { text-align: right; }
+.usage-name { max-width: 28rem; overflow: hidden; text-overflow: ellipsis; }
+.sort-button {
+  font: inherit; font-weight: 500; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; white-space: nowrap;
+}
+.sort-button:hover { color: var(--ink); }
+.usage-table th[aria-sort] { color: var(--ink); }
+
+/* The chart: bars from zero, one line at 200k, one tick at each model's window. */
+.ctx-chart { margin: 0; --label-w: minmax(10rem, 18rem); --value-w: 15rem; }
+.ctx-key { display: flex; flex-wrap: wrap; gap: var(--s-2) var(--s-4); margin-bottom: var(--s-3); font-size: var(--t-xs); color: var(--muted); }
+.ctx-swatch { display: inline-block; vertical-align: middle; margin-right: var(--s-1); }
+.ctx-swatch-bar { width: 1.25rem; height: 0.5rem; background: var(--lichen); border-radius: 0 2px 2px 0; }
+.ctx-swatch-line { width: 0; height: 0.875rem; border-left: 2px dashed var(--ink); }
+.ctx-swatch-tick { width: 0; height: 0.875rem; border-left: 2px solid var(--muted); }
+.ctx-section h3 { margin: var(--s-3) 0 var(--s-1); font-size: var(--t-sm); font-weight: 500; color: var(--faint); }
+.ctx-section ul { list-style: none; margin: 0; padding: 0; }
+.ctx-row, .ctx-axis { display: grid; grid-template-columns: var(--label-w) minmax(8rem, 1fr) var(--value-w); column-gap: var(--s-3); align-items: center; }
+.ctx-row { min-height: 1.75rem; font-size: var(--t-sm); }
+.ctx-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ctx-plot { position: relative; height: 1.75rem; border-left: 1px solid var(--control-border); }
+.ctx-bar { position: absolute; left: 0; top: 0.5rem; height: 0.75rem; background: var(--lichen); border-radius: 0 4px 4px 0; }
+.ctx-200k { position: absolute; top: 0; bottom: 0; border-left: 2px dashed var(--ink); opacity: 0.7; }
+.ctx-window { position: absolute; top: 0.25rem; bottom: 0.25rem; border-left: 2px solid var(--muted); }
+.ctx-value { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.ctx-axis { margin-top: var(--s-1); font-size: var(--t-xs); color: var(--faint); }
+.ctx-axis-scale { position: relative; height: 1.25rem; }
+.ctx-axis-scale > span { position: absolute; transform: translateX(-50%); }
+.ctx-axis-scale > span:first-child { transform: none; }
